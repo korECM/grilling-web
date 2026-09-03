@@ -33,7 +33,7 @@ If `grilling` is not in the list of available skills, do not start the interview
 
    State lives in `~/.cache/grill-web/`. The previous session is wiped.
 
-2. Write a round. Create `~/.cache/grill-web/rounds/<n>.json` with the Write tool. Count from 1. Schema below.
+2. Write a round. Create `~/.cache/grill-web/rounds/<n>.json` with the Write tool. Count from 1. Schema below. If you need to fix a round the user has not answered yet, rewrite the same file; the form picks up the change within a couple of seconds and keeps whatever the user has already filled in.
 
 3. Wait. This blocks until the answer arrives. After 9.5 minutes it exits with code 3; run the same command again.
 

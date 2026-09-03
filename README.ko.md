@@ -146,6 +146,15 @@ skills/grill-web/
   ui/server.ts     bun 서버. 폼 서빙, 파일 중계, `wait`로 대기
 ```
 
+## 개발
+
+```bash
+bun install   # 정제기 테스트용 happy-dom
+bun test      # 서버 API 계약 + 정제기 허용 목록
+```
+
+서버 테스트는 임의 포트와 임시 상태 폴더로 `server.ts`를 띄우니 진행 중인 인터뷰를 건드리지 않는다.
+
 ## 라이선스
 
 MIT

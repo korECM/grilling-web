@@ -146,6 +146,15 @@ skills/grill-web/
   ui/server.ts     bun server. Serves the form, relays files, blocks on `wait`
 ```
 
+## Development
+
+```bash
+bun install   # happy-dom, for the sanitizer tests
+bun test      # server API contract + sanitizer allowlist
+```
+
+The server test starts `server.ts` on a random port with a temporary state directory, so it will not touch a running interview.
+
 ## License
 
 MIT

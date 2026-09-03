@@ -237,6 +237,7 @@
 </div>
 <div class="toast" id="toast"></div>
 
+<script src="/sanitize.js"></script>
 <script type="module">
   import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
   mermaid.initialize({
@@ -267,8 +268,9 @@
   const side = document.getElementById("side");
   const main = document.getElementById("main");
   const toastEl = document.getElementById("toast");
-  let last = null, lastState = null, currentRound = null;
-  const drafts = {}, noteOpen = {}, svgCache = new Map();
+  let last = null, lastState = null, currentRound = null, sessionId = null;
+  let drafts = {}, noteOpen = {};
+  const svgCache = new Map();
   let mmSeq = 0;
 
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -321,25 +323,7 @@
     return out;
   }
 
-  // svg, html 블록 정제. 스크립트, 프레임, 폼, on* 핸들러, javascript: 링크를 걷어낸다.
-  const BAD_TAGS = new Set(["script", "style", "iframe", "frame", "object", "embed", "link", "meta", "base", "form", "input", "button", "textarea", "select"]);
-  function sanitize(markup) {
-    const root = new DOMParser().parseFromString(`<div>${markup ?? ""}</div>`, "text/html").body.firstElementChild;
-    const walk = (el) => {
-      for (const child of [...el.children]) {
-        if (BAD_TAGS.has(child.localName)) { child.remove(); continue; }
-        for (const attr of [...child.attributes]) {
-          const name = attr.name.toLowerCase();
-          const val = attr.value.replace(/\s/g, "").toLowerCase();
-          const isUrl = ["href", "src", "xlink:href", "action", "formaction", "data"].includes(name);
-          if (name.startsWith("on") || name === "srcdoc" || (isUrl && /^(javascript|vbscript|data:text\/html):/.test(val))) child.removeAttribute(attr.name);
-        }
-        walk(child);
-      }
-    };
-    walk(root);
-    return root.innerHTML;
-  }
+  const sanitize = (m) => (window.grillSanitize ? window.grillSanitize(m) : "");
 
   const mermaidHtml = (code) => `<div class="mm" data-src="${esc(code)}"></div>`;
   const tableHtml = (head, rows) => `<table><thead><tr>${(head ?? []).map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>${(rows ?? []).map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
@@ -606,7 +590,7 @@
     const r = currentRound;
     if (!r || remaining() > 0) return;
     const answers = r.questions.map((q) => { const d = draft(r.round, q.n); return d.skip ? { n: q.n, value: null, note: d.note.trim(), skipped: true } : { n: q.n, value: d.value, note: d.note.trim() }; });
-    const res = await fetch("/api/answers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ round: r.round, answers }) });
+    const res = await fetch("/api/answers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session: sessionId, round: r.round, answers }) });
     if (!res.ok) { toast((await res.json()).error ?? "보내지 못했어요"); return; }
     toast("보냈어요");
     await poll(true);
@@ -615,7 +599,9 @@
   async function poll(force) {
     try {
       const s = await (await fetch("/api/state", { cache: "no-store" })).json();
-      const sig = JSON.stringify([s.title, s.summary, s.rounds.map((r) => [r.round, !!r.answers, (r.questions ?? []).length])]);
+      // 세션이 바뀌면(새 인터뷰 시작) 이 탭의 초안은 버린다. 라운드는 rev로 내용 변경까지 잡는다.
+      if (s.session !== sessionId) { sessionId = s.session; drafts = {}; noteOpen = {}; }
+      const sig = JSON.stringify([s.session, s.title, s.summary, s.rounds.map((r) => [r.round, r.rev, !!r.answers])]);
       const changed = sig !== last;
       if (force || changed) { last = sig; lastState = s; render(s); if (changed) window.scrollTo({ top: 0 }); }
     } catch { /* 서버가 잠깐 없을 수 있다. 다음 폴링에서 다시 */ }

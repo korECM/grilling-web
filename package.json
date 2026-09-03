@@ -1,0 +1,11 @@
+{
+  "name": "grilling-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test skills/grill-web/ui"
+  },
+  "devDependencies": {
+    "happy-dom": "^15.11.7"
+  }
+}

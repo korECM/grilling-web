@@ -6,18 +6,20 @@
 //   bun server.ts reset "주제" 상태만 초기화
 //
 // 상태 디렉토리: $GRILL_WEB_DIR (기본 ~/.cache/grill-web)
-//   session.json      { title, startedAt }
+//   session.json      { id, title, startedAt }  id는 세션마다 새로 난다. 옛 탭의 답변을 거르는 기준
 //   rounds/<n>.json   모델이 쓴 라운드
 //   answers/<n>.json  폼이 쓴 답변
 //   summary.md        있으면 폼이 마무리 화면으로 보여줌
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 const DIR = process.env.GRILL_WEB_DIR ?? join(process.env.HOME ?? ".", ".cache", "grill-web");
 const PORT = Number(process.env.GRILL_WEB_PORT ?? 4747);
 const URL = `http://localhost:${PORT}`;
 const HTML = join(import.meta.dir, "index.html");
+const SANITIZE_JS = join(import.meta.dir, "sanitize.js");
 
 const roundsDir = () => join(DIR, "rounds");
 const answersDir = () => join(DIR, "answers");
@@ -39,22 +41,26 @@ function roundNumbers(): number[] {
 }
 
 function state() {
-  const session = readJson(join(DIR, "session.json")) ?? { title: "" };
-  const rounds = roundNumbers().map((n) => ({
-    round: n,
-    ...readJson(join(roundsDir(), `${n}.json`)),
-    answers: readJson(join(answersDir(), `${n}.json`)),
-  }));
+  const session = readJson(join(DIR, "session.json")) ?? { id: null, title: "" };
+  const rounds = roundNumbers().map((n) => {
+    const path = join(roundsDir(), `${n}.json`);
+    return {
+      round: n,
+      rev: statSync(path).mtimeMs, // 같은 라운드를 고쳐 쓰면 바뀐다. 폼이 이 값으로 다시 그린다
+      ...readJson(path),
+      answers: readJson(join(answersDir(), `${n}.json`)),
+    };
+  });
   const summaryPath = join(DIR, "summary.md");
   const summary = existsSync(summaryPath) ? readFileSync(summaryPath, "utf8") : null;
-  return { title: session.title, rounds, summary };
+  return { session: session.id, title: session.title, rounds, summary };
 }
 
 function reset(title: string) {
   rmSync(DIR, { recursive: true, force: true });
   mkdirSync(roundsDir(), { recursive: true });
   mkdirSync(answersDir(), { recursive: true });
-  writeFileSync(join(DIR, "session.json"), JSON.stringify({ title, startedAt: new Date().toISOString() }, null, 2));
+  writeFileSync(join(DIR, "session.json"), JSON.stringify({ id: randomUUID(), title, startedAt: new Date().toISOString() }, null, 2));
 }
 
 // 포트 상태. "ours"는 grill-web이 떠 있음, "other"는 다른 프로세스가 점유, "free"는 비어 있음.
@@ -114,6 +120,10 @@ function serve() {
         const body = await req.json().catch(() => null);
         const n = Number(body?.round);
         if (!Number.isFinite(n)) return Response.json({ error: "round가 필요합니다" }, { status: 400 });
+        const current = readJson(join(DIR, "session.json"))?.id ?? null;
+        if (!body?.session || body.session !== current) {
+          return Response.json({ error: "다른 세션의 답변입니다. 페이지를 새로 고치세요" }, { status: 409 });
+        }
         const round = readJson(join(roundsDir(), `${n}.json`));
         if (!round) return Response.json({ error: `${n}라운드가 없습니다` }, { status: 404 });
         const problems = validateAnswers(round, body);
@@ -124,6 +134,7 @@ function serve() {
         return Response.json({ ok: true });
       }
       if (pathname === "/") return new Response(Bun.file(HTML), { headers: { "content-type": "text/html; charset=utf-8" } });
+      if (pathname === "/sanitize.js") return new Response(Bun.file(SANITIZE_JS), { headers: { "content-type": "text/javascript; charset=utf-8" } });
       return new Response("not found", { status: 404 });
     },
   });
