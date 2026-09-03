@@ -397,7 +397,9 @@
       const q = (r.questions ?? []).find((x) => x.n === Number(n));
       const cur = d[n];
       if (!q) { delete d[n]; continue; }
-      const fresh = { value: q.kind === "multi" ? [] : "", note: cur.note ?? "", other: false, skip: !!cur.skip };
+      // 제목이나 종류가 바뀌었으면 다른 질문이다. 메모와 미룸까지 전부 버린다
+      if (cur.fp !== fpOf(q)) { delete d[n]; continue; }
+      const fresh = { value: q.kind === "multi" ? [] : "", note: cur.note ?? "", other: false, skip: !!cur.skip, fp: cur.fp };
       if (q.kind === "multi") {
         if (!Array.isArray(cur.value)) { d[n] = fresh; continue; }
         cur.value = cur.value.filter((v) => (q.options ?? []).includes(v));
@@ -413,9 +415,11 @@
       if (d[n].other && q.kind !== "choice") d[n] = fresh;
     }
   }
+  const fpOf = (q) => `${q.kind}|${q.title}`;
   function draft(round, n) {
     drafts[round] ??= {};
-    drafts[round][n] ??= { value: kindOf(n) === "multi" ? [] : "", note: "", other: false, skip: false };
+    const q = currentRound?.questions?.find((x) => x.n === n);
+    drafts[round][n] ??= { value: q?.kind === "multi" ? [] : "", note: "", other: false, skip: false, fp: q ? fpOf(q) : "" };
     return drafts[round][n];
   }
   function complete(q, d) {
@@ -627,9 +631,13 @@
     await poll(true);
   }
 
+  let pollSeq = 0, pollApplied = 0;
   async function poll(force) {
+    const my = ++pollSeq;
     try {
       const s = await (await fetch("/api/state", { cache: "no-store" })).json();
+      if (my < pollApplied) return; // 더 새 응답이 이미 반영됐다. 늦게 온 옛 응답은 버린다
+      pollApplied = my;
       // 세션이 바뀌면(새 인터뷰 시작) 이 탭의 초안은 버린다. 라운드는 rev로 내용 변경까지 잡는다.
       if (s.session !== sessionId) { sessionId = s.session; drafts = {}; noteOpen = {}; }
       for (const r of s.rounds) {

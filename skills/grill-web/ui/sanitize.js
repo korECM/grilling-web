@@ -29,7 +29,8 @@
     if (name.startsWith("on") || name === "srcdoc" || name === "style") return false;
     if (URL_ATTRS.has(name)) return urlOk(tag, value);
     if (GLOBAL_ATTRS.has(name) || name.startsWith("aria-") || name.startsWith("data-")) return true;
-    if (isSvg) return !/url\s*\(\s*(?!['"]?#)/i.test(value); // fill="url(#local)"만 허용. 외부 url()은 리소스 요청이 된다
+    // svg 프레젠테이션 속성은 CSS 값이라 이스케이프(u\72l)로 url(을 숨길 수 있다. 역슬래시가 있으면 통째로 버린다.
+    if (isSvg) return !value.includes("\\") && !/url\s*\(\s*(?!['"]?#)/i.test(value); // fill="url(#local)"만 허용
     return (ATTRS[tag] ?? []).includes(name);
   }
 

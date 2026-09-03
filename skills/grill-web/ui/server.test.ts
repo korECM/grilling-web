@@ -1,6 +1,6 @@
 // server.ts API 계약 테스트. 임시 디렉토리와 임의 포트로 서버를 띄운다.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,6 +29,8 @@ const good = () => [
   { n: 5, value: "fine", note: "" },
 ];
 const state = async () => (await fetch(`${URL}/api/state`)).json();
+const rev = async (n = 1) => (await state()).rounds.find((r: any) => r.round === n)?.rev as string;
+const withRev = async (body: any) => ({ rev: await rev(body.round), ...body });
 const post = (body: unknown, headers: Record<string, string> = {}) => fetch(`${URL}/api/answers`, { method: "POST", headers: { "content-type": "application/json", origin: `http://127.0.0.1:${PORT}`, ...headers }, body: JSON.stringify(body) });
 const session = async () => (await state()).session as string;
 
@@ -57,12 +59,23 @@ describe("health and state", () => {
     expect(s.rounds[0].answers).toBeNull();
     expect(s.summary).toBeNull();
   });
-  test("rewriting a round file changes its rev", async () => {
-    const before = (await state()).rounds[0].rev;
+  test("rev is a content hash: same-size rewrite in the same instant still changes it", async () => {
+    const before = await rev();
     const path = join(DIR, "rounds", "1.json");
-    const later = new Date(Date.now() + 5000);
-    utimesSync(path, later, later);
-    expect((await state()).rounds[0].rev).not.toBe(before);
+    const text = readFileSync(path, "utf8");
+    writeFileSync(path, text.replace('"intro":"first"', '"intro":"fixed"')); // 같은 길이
+    expect(await rev()).not.toBe(before);
+    writeFileSync(path, text);
+    expect(await rev()).toBe(before);
+  });
+  test("state and health refuse a foreign Host", async () => {
+    expect((await fetch(`${URL}/api/state`, { headers: { host: "evil.example" } })).status).toBe(403);
+    expect((await fetch(`${URL}/api/health`, { headers: { host: "evil.example" } })).status).toBe(403);
+  });
+  test("serve records its pid and port for the state dir", () => {
+    const owner = JSON.parse(readFileSync(join(DIR, "server.json"), "utf8"));
+    expect(owner.port).toBe(PORT);
+    expect(typeof owner.pid).toBe("number");
   });
   test("serves the form and the sanitizer", async () => {
     expect((await fetch(`${URL}/`)).headers.get("content-type")).toContain("text/html");
@@ -73,7 +86,7 @@ describe("health and state", () => {
 
 describe("request origin", () => {
   test("rejects a cross-site simple POST and a foreign origin", async () => {
-    const body = { session: await session(), round: 1, answers: good() };
+    const body = await withRev({ session: await session(), round: 1, answers: good() });
     const plain = await fetch(`${URL}/api/answers`, { method: "POST", headers: { "content-type": "text/plain" }, body: JSON.stringify(body) });
     expect(plain.status).toBe(403);
     expect((await post(body, { origin: "http://evil.example" })).status).toBe(403);
@@ -98,14 +111,13 @@ describe("request origin", () => {
 
 describe("answer validation", () => {
   test("rejects a missing or stale session", async () => {
-    expect((await post({ round: 1, answers: good() })).status).toBe(409);
-    expect((await post({ session: "stale", round: 1, answers: good() })).status).toBe(409);
+    expect((await post(await withRev({ round: 1, answers: good() }))).status).toBe(409);
+    expect((await post(await withRev({ session: "stale", round: 1, answers: good() }))).status).toBe(409);
   });
-  test("rejects a submission made against an older revision of the round", async () => {
-    const res = await post({ session: await session(), round: 1, rev: "stale-rev", answers: good() });
-    expect(res.status).toBe(409);
-    const cur = (await state()).rounds[0].rev;
-    const ok = await post({ session: await session(), round: 1, rev: cur, answers: [{ n: 1, value: "A", note: "" }] });
+  test("rejects a submission made against an older revision, or with no rev at all", async () => {
+    expect((await post({ session: await session(), round: 1, rev: "stale-rev", answers: good() })).status).toBe(409);
+    expect((await post({ session: await session(), round: 1, answers: good() })).status).toBe(400);
+    const ok = await post(await withRev({ session: await session(), round: 1, answers: [{ n: 1, value: "A", note: "" }] }));
     expect(ok.status).toBe(400); // rev는 맞지만 답이 모자라서 400. rev 검사는 통과했다
   });
   test("rejects an unknown round", async () => {
@@ -130,24 +142,27 @@ describe("answer validation", () => {
   ];
   for (const [name, answers] of bad) {
     test(`rejects ${name}`, async () => {
-      const res = await post({ session: await session(), round: 1, answers });
+      const res = await post(await withRev({ session: await session(), round: 1, answers }));
       expect(res.status).toBe(400);
       expect(typeof (await res.json()).error).toBe("string");
     });
   }
   test("accepts a valid submission with a skipped answer, then refuses a resubmit", async () => {
     const answers = good().map((a) => (a.n === 2 ? { n: 2, value: null, note: "", skipped: true } : a));
-    const res = await post({ session: await session(), round: 1, answers });
+    const res = await post(await withRev({ session: await session(), round: 1, answers }));
     expect(res.status).toBe(200);
     const saved = JSON.parse(readFileSync(join(DIR, "answers", "1.json"), "utf8"));
     expect(saved.answers).toEqual(answers);
+    expect(saved.session).toBe(await session());
+    expect(saved.rev).toBe(await rev());
     expect(typeof saved.submittedAt).toBe("string");
+    expect(existsSync(join(DIR, "answers", `1.json.${0}.tmp`))).toBe(false);
     expect((await state()).rounds[0].answers.answers).toEqual(answers);
-    expect((await post({ session: await session(), round: 1, answers })).status).toBe(409);
+    expect((await post(await withRev({ session: await session(), round: 1, answers }))).status).toBe(409);
   });
   test("choice accepts an 'other' value not in options", async () => {
     writeFileSync(join(DIR, "rounds", "2.json"), JSON.stringify({ questions: [{ n: 1, title: "pick", kind: "choice", options: ["A"], recommendation: "A" }] }));
-    const res = await post({ session: await session(), round: 2, answers: [{ n: 1, value: "something else", note: "" }] });
+    const res = await post(await withRev({ session: await session(), round: 2, answers: [{ n: 1, value: "something else", note: "" }] }));
     expect(res.status).toBe(200);
   });
 });
@@ -167,20 +182,31 @@ describe("summary and reset", () => {
     writeFileSync(join(DIR, "summary.md"), "# done");
     expect((await state()).summary).toBe("# done");
   });
-  test("reset starts a new session and wipes rounds", async () => {
+  test("reset starts a new session, wipes rounds, and leaves unrelated files alone", async () => {
     const before = await session();
+    writeFileSync(join(DIR, "keep.txt"), "mine");
     Bun.spawnSync([process.execPath, SERVER, "reset", "second topic"], { env });
     const s = await state();
     expect(s.session).not.toBe(before);
     expect(s.title).toBe("second topic");
     expect(s.rounds).toEqual([]);
     expect(s.summary).toBeNull();
+    expect(readFileSync(join(DIR, "keep.txt"), "utf8")).toBe("mine");
+    expect(existsSync(join(DIR, "server.json"))).toBe(true);
+  });
+  test("wait gives up when a new session starts underneath it", async () => {
+    writeFileSync(join(DIR, "rounds", "1.json"), JSON.stringify({ questions: [{ n: 1, title: "t", kind: "yesno", recommendation: "yes" }] }));
+    const waiter = Bun.spawn([process.execPath, SERVER, "wait", "1"], { env, stdout: "ignore", stderr: "pipe" });
+    await Bun.sleep(300);
+    Bun.spawnSync([process.execPath, SERVER, "reset", "third topic"], { env });
+    expect(await waiter.exited).toBe(4);
+    expect(await new Response(waiter.stderr).text()).toContain("새 세션");
   });
   test("wait prints the answer file when it appears", async () => {
     writeFileSync(join(DIR, "rounds", "1.json"), JSON.stringify({ questions: [{ n: 1, title: "t", kind: "yesno", recommendation: "yes" }] }));
     const waiter = Bun.spawn([process.execPath, SERVER, "wait", "1"], { env, stdout: "pipe", stderr: "ignore" });
     await Bun.sleep(300);
-    const res = await post({ session: await session(), round: 1, answers: [{ n: 1, value: "yes", note: "" }] });
+    const res = await post(await withRev({ session: await session(), round: 1, answers: [{ n: 1, value: "yes", note: "" }] }));
     expect(res.status).toBe(200);
     const out = await new Response(waiter.stdout).text();
     expect(await waiter.exited).toBe(0);

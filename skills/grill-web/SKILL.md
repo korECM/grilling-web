@@ -31,11 +31,11 @@ If `grilling` is not in the list of available skills, do not start the interview
    bun "$SKILL_DIR/ui/server.ts" up "payment retry policy"
    ```
 
-   State lives in `~/.cache/grill-web/`. The previous session is wiped.
+   State lives in `~/.cache/grill-web/`. The previous session's rounds, answers and summary are wiped; nothing else in that folder is touched. If a server for that folder is already running on another port, `up` reuses it.
 
 2. Write a round. Create `~/.cache/grill-web/rounds/<n>.json` with the Write tool. Count from 1. Schema below. If you need to fix a round the user has not answered yet, rewrite the same file; the form picks up the change within a couple of seconds and keeps whatever the user has already filled in.
 
-3. Wait. This blocks until the answer arrives. After 9.5 minutes it exits with code 3; run the same command again.
+3. Wait. This blocks until the answer arrives. After 9.5 minutes it exits with code 3; run the same command again. If it exits with code 4, a new session was started underneath you (someone ran `up` again); drop this round and start over from step 1.
 
    ```bash
    bun "$SKILL_DIR/ui/server.ts" wait <n>
