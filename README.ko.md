@@ -129,11 +129,14 @@ sequenceDiagram
 
 ```json
 {
+  "session": "8cbb7375-…",
   "round": 1,
+  "rev": "2c61370571d92168",
   "answers": [
     { "n": 1, "value": "별도 retry 테이블", "note": "주문 테이블은 이미 컬럼이 40개" },
     { "n": 2, "value": 10, "note": "" }
-  ]
+  ],
+  "submittedAt": "2026-09-03T02:11:08.000Z"
 }
 ```
 
@@ -142,8 +145,10 @@ sequenceDiagram
 ```
 skills/grill-web/
   SKILL.md         규칙과 스키마. 에이전트가 읽는 파일
-  ui/index.html    폼. 한 파일, 의존성 없음
+  ui/index.html    폼. 빌드 없음. Pretendard와 mermaid는 CDN에서 받는다
+  ui/sanitize.js   질문 본문 허용 목록 정제기
   ui/server.ts     bun 서버. 폼 서빙, 파일 중계, `wait`로 대기
+  ui/*.test.ts     bun test. 서버 API 계약, 정제기 케이스
 ```
 
 ## 개발

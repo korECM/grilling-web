@@ -160,10 +160,18 @@ describe("answer validation", () => {
     expect((await state()).rounds[0].answers.answers).toEqual(answers);
     expect((await post(await withRev({ session: await session(), round: 1, answers }))).status).toBe(409);
   });
-  test("choice accepts an 'other' value not in options", async () => {
+  test("choice accepts a value outside options only when flagged as other", async () => {
     writeFileSync(join(DIR, "rounds", "2.json"), JSON.stringify({ questions: [{ n: 1, title: "pick", kind: "choice", options: ["A"], recommendation: "A" }] }));
-    const res = await post(await withRev({ session: await session(), round: 2, answers: [{ n: 1, value: "something else", note: "" }] }));
+    const bad = await post(await withRev({ session: await session(), round: 2, answers: [{ n: 1, value: "something else", note: "" }] }));
+    expect(bad.status).toBe(400);
+    const res = await post(await withRev({ session: await session(), round: 2, answers: [{ n: 1, value: "something else", note: "", other: true }] }));
     expect(res.status).toBe(200);
+  });
+  test("rejects an unknown question kind instead of treating it as text", async () => {
+    writeFileSync(join(DIR, "rounds", "3.json"), JSON.stringify({ questions: [{ n: 1, title: "typo", kind: "chocie", options: ["A"], recommendation: "A" }] }));
+    const res = await post(await withRev({ session: await session(), round: 3, answers: [{ n: 1, value: "A", note: "" }] }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("chocie");
   });
 });
 

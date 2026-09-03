@@ -154,6 +154,7 @@
   .range .val small { font-size: 14px; font-weight: 500; color: var(--ink-2); margin-left: 4px; }
   .range .val.empty { color: var(--ink-disabled); }
   .range input[type=range] { width: 100%; margin: 10px 0 4px; accent-color: var(--theme); }
+  .range input[type=range].empty { opacity: .45; }
   .range .ends { display: flex; justify-content: space-between; font-size: 12px; line-height: 16px; color: var(--ink-2); }
 
   .rec { margin-bottom: 10px; padding: 10px 14px; background: var(--theme-tint); border-radius: var(--r-s); font-size: 14px; line-height: 20px; display: flex; gap: 12px; align-items: flex-start; }
@@ -222,7 +223,7 @@
     .side-cta { display: flex; align-items: center; gap: 12px; margin: 0 0 0 auto; }
     .side-cta .hint { margin: 0; }
     .side-cta .send { width: 160px; height: 40px; }
-    .ghost { display: none; }
+    .ghost { width: auto; height: 40px; margin: 0; padding: 0 14px; }
   }
   @media (max-width: 640px) {
     .card { padding: 20px; }
@@ -236,7 +237,7 @@
   <aside id="side"></aside>
   <main id="main"></main>
 </div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="/sanitize.js"></script>
 <script type="module">
@@ -269,7 +270,7 @@
   const side = document.getElementById("side");
   const main = document.getElementById("main");
   const toastEl = document.getElementById("toast");
-  let last = null, lastState = null, currentRound = null, sessionId = null, sending = false;
+  let last = null, lastStructure = null, lastState = null, currentRound = null, sessionId = null, sending = false;
   let drafts = {}, noteOpen = {};
   const svgCache = new Map();
   let mmSeq = 0;
@@ -386,7 +387,6 @@
     setTimeout(() => toastEl.classList.remove("show"), 1800);
   }
 
-  const kindOf = (n) => currentRound?.questions?.find((q) => q.n === n)?.kind;
   const revs = {}; // round -> 마지막으로 본 rev
 
   // 라운드 파일이 고쳐졌을 때 기존 초안을 새 질문과 대조한다. 안 맞는 초안은 버리거나 잘라낸다.
@@ -415,7 +415,7 @@
       if (d[n].other && q.kind !== "choice") d[n] = fresh;
     }
   }
-  const fpOf = (q) => `${q.kind}|${q.title}`;
+  const fpOf = (q) => `${q.kind}|${q.title}|${(q.options ?? []).join("\u0001")}`;
   function draft(round, n) {
     drafts[round] ??= {};
     const q = currentRound?.questions?.find((x) => x.n === n);
@@ -423,6 +423,7 @@
     return drafts[round][n];
   }
   function complete(q, d) {
+    if (!KINDS.includes(q.kind)) return false;
     if (d.skip) return true;
     if (q.kind === "multi") return d.value.length > 0;
     if (q.kind === "text") return d.value.trim().length > 0;
@@ -438,8 +439,10 @@
     return a.value ?? "";
   }
   const remaining = () => currentRound ? currentRound.questions.filter((q) => !complete(q, draft(currentRound.round, q.n))).length : 0;
+  const sendable = () => !!currentRound && (currentRound.questions ?? []).length > 0 && remaining() === 0;
   const skippedCount = () => currentRound ? currentRound.questions.filter((q) => draft(currentRound.round, q.n).skip).length : 0;
   function hintText() {
+    if (!(currentRound?.questions ?? []).length) return "이 라운드에 질문이 없어요";
     const left = remaining(), sk = skippedCount();
     return (left ? `${left}개 남았어요` : "다 골랐어요") + (sk ? ` · ${sk}개 미룸` : "");
   }
@@ -457,6 +460,18 @@
       }
       out += "\n";
     }
+    const open = (state.rounds ?? []).find((r) => !r.answers);
+    if (open && drafts[open.round]) {
+      out += `\n## 라운드 ${open.round} (작성 중)\n`;
+      for (const q of open.questions ?? []) {
+        const d = drafts[open.round][q.n];
+        if (!d) continue;
+        const shown = d.skip ? "(미룸)" : complete(q, d) ? answerText(q, { value: d.value }) : "";
+        if (shown) out += `\n- **Q${q.n}. ${q.title}** → ${shown}`;
+        if (d.note) out += `\n  - ${d.note}`;
+      }
+      out += "\n";
+    }
     if (state.summary) out += `\n## 정리\n\n${state.summary}\n`;
     return out;
   }
@@ -471,36 +486,42 @@
           qs.map((q) => { const d = draft(open.round, q.n); return `<button class="row q" data-jump="q-${q.n}"><span class="mark ${d.skip ? "skip" : complete(q, d) ? "done" : ""}"></span>Q${q.n}. ${esc(q.title)}</button>`; }).join("") : "") +
         `</div>`;
     }
-    const left = remaining();
-    const cta = open ? `<div class="side-cta"><p class="hint">${hintText()}</p><button class="send" data-send ${left ? "disabled" : ""}>답변 보내기</button></div>` : "";
-    const copy = past.length ? `<button class="ghost" data-copy>지금까지 마크다운으로 복사</button>` : "";
+    const cta = open ? `<p class="hint">${hintText()}</p><button class="send" data-send ${sendable() ? "" : "disabled"}>답변 보내기</button>` : "";
+    const copy = (past.length || open) ? `<button class="ghost" data-copy>지금까지 마크다운으로 복사</button>` : "";
     side.innerHTML = `<div class="caption">grill</div><h1>${esc(state.title || "인터뷰")}</h1>
-      <div class="meta">${state.summary ? "인터뷰 끝" : open ? `라운드 ${open.round} 진행 중` : "준비 중"}</div>${nav}${cta}${cta ? copy : `<div class="side-cta">${copy}</div>`}`;
+      <div class="meta">${state.summary ? "인터뷰 끝" : open ? `라운드 ${open.round} 진행 중` : "준비 중"}</div>${nav}<div class="side-cta">${cta}${copy}</div>`;
   }
 
+  const KINDS = ["yesno", "choice", "multi", "range", "text"];
   function widgetFor(open, q, d) {
     const recs = [].concat(q.recommendation ?? []);
-    if (q.kind === "yesno") return ["답", `<div class="seg">${["yes", "no"].map((v) =>
-      `<button class="opt ${d.value === v ? "on" : ""}" data-set="${q.n}" data-v="${v}">${v === "yes" ? "예" : "아니요"}${q.recommendation === v ? '<span class="pill">추천</span>' : ""}</button>`).join("")}</div>`];
+    const lb = `aria-labelledby="qt-${q.n}"`;
+    if (q.kind === "yesno") return ["답", `<div class="seg" role="radiogroup" ${lb}>${["yes", "no"].map((v) =>
+      `<button class="opt ${d.value === v ? "on" : ""}" role="radio" aria-checked="${d.value === v}" data-set="${q.n}" data-v="${v}">${v === "yes" ? "예" : "아니요"}${q.recommendation === v ? '<span class="pill">추천</span>' : ""}</button>`).join("")}</div>`];
     if (q.kind === "choice" || q.kind === "multi") {
       const multi = q.kind === "multi";
+      const role = multi ? "checkbox" : "radio";
       const opts = (q.options ?? []).map((o) => {
         const on = multi ? d.value.includes(o) : (!d.other && d.value === o);
-        return `<button class="opt ${on ? "on" : ""}" data-${multi ? "toggle" : "set"}="${q.n}" data-v="${esc(o)}"><span class="dot ${multi ? "sq" : ""}"></span><span>${esc(o)}</span>${recs.includes(o) ? '<span class="pill">추천</span>' : ""}</button>`;
+        return `<button class="opt ${on ? "on" : ""}" role="${role}" aria-checked="${on}" data-${multi ? "toggle" : "set"}="${q.n}" data-v="${esc(o)}"><span class="dot ${multi ? "sq" : ""}"></span><span>${esc(o)}</span>${recs.includes(o) ? '<span class="pill">추천</span>' : ""}</button>`;
       }).join("");
-      const other = multi ? "" : `<div class="other ${d.other ? "on" : ""}"><button class="opt ${d.other ? "on" : ""}" data-other="${q.n}"><span class="dot"></span><span>다른 답</span></button><input type="text" data-othertext="${q.n}" placeholder="직접 적어 주세요" value="${esc(d.other ? d.value : "")}"></div>`;
-      return [multi ? "여러 개 골라도 돼요" : "하나 고르기", `<div class="opts">${opts}${other}</div>`];
+      const other = multi ? "" : `<div class="other ${d.other ? "on" : ""}"><button class="opt ${d.other ? "on" : ""}" role="radio" aria-checked="${d.other}" data-other="${q.n}"><span class="dot"></span><span>다른 답</span></button><input type="text" data-othertext="${q.n}" aria-label="다른 답" placeholder="직접 적어 주세요" value="${esc(d.other ? d.value : "")}"></div>`;
+      return [multi ? "여러 개 골라도 돼요" : "하나 고르기", `<div class="opts" role="${multi ? "group" : "radiogroup"}" ${lb}>${opts}${other}</div>`];
     }
     if (q.kind === "range") {
       const min = q.min ?? 0, max = q.max ?? 100, step = q.step ?? 1;
       const has = d.value !== "";
       const rec = q.recommendation != null ? `<div class="rec"><span class="tag">추천</span><div class="txt">${esc(q.recommendation)}${esc(q.unit ?? "")}</div><button data-rec="${q.n}">이대로</button></div>` : "";
-      return ["값 고르기", rec + `<div class="range"><div class="val ${has ? "" : "empty"}">${has ? esc(d.value) : "아직"}${has && q.unit ? `<small>${esc(q.unit)}</small>` : ""}</div>
-        <input type="range" data-range="${q.n}" min="${min}" max="${max}" step="${step}" value="${has ? d.value : q.recommendation ?? min}">
+      // 아직 안 골랐으면 손잡이를 끝에 두고 흐리게. 추천값 자리에 두면 고른 것처럼 보인다
+      return ["값 고르기", rec + `<div class="range"><div class="val ${has ? "" : "empty"}" aria-live="polite">${has ? esc(d.value) : "아직 안 골랐어요"}${has && q.unit ? `<small>${esc(q.unit)}</small>` : ""}</div>
+        <input type="range" class="${has ? "" : "empty"}" data-range="${q.n}" ${lb} min="${min}" max="${max}" step="${step}" value="${has ? d.value : min}">
         <div class="ends"><span>${min}${esc(q.unit ?? "")}</span><span>${max}${esc(q.unit ?? "")}</span></div></div>`];
     }
-    const rec = q.recommendation ? `<div class="rec"><span class="tag">추천</span><div class="txt">${esc(q.recommendation)}</div><button data-rec="${q.n}">이대로</button></div>` : "";
-    return ["자유롭게", rec + `<textarea data-text="${q.n}" placeholder="생각나는 대로 적어 주세요">${esc(d.value)}</textarea>`];
+    if (q.kind === "text") {
+      const rec = q.recommendation ? `<div class="rec"><span class="tag">추천</span><div class="txt">${esc(q.recommendation)}</div><button data-rec="${q.n}">이대로</button></div>` : "";
+      return ["자유롭게", rec + `<textarea data-text="${q.n}" ${lb} placeholder="생각나는 대로 적어 주세요">${esc(d.value)}</textarea>`];
+    }
+    return ["", `<div class="skipbox" role="alert"><b>답할 수 없는 질문이에요</b>알 수 없는 종류 <code>${esc(q.kind)}</code>입니다. 에이전트가 라운드 파일을 고쳐야 합니다.</div>`];
   }
 
   function renderQuestion(open, q) {
@@ -513,12 +534,12 @@
       ? `<div class="skipbox"><b>미뤄 뒀어요</b>다음 라운드에 다시 물어요. 지금 답하고 싶으면 되돌리세요.<br><button data-unskip="${q.n}">다시 답하기</button></div>`
       : `<div class="label">${label}</div>${widget}
         <div class="later">
-          <div class="note ${noteOpen[key] || d.note ? "on" : ""}"><button class="note-toggle" data-note="${q.n}">이유나 조건 덧붙이기</button></div>
+          <div class="note ${noteOpen[key] || d.note ? "on" : ""}"><button class="note-toggle" data-note="${q.n}" aria-controls="note-${q.n}" aria-expanded="${!!(noteOpen[key] || d.note)}">이유나 조건 덧붙이기</button></div>
           <button data-skip="${q.n}">나중에 답할게요</button>
         </div>
-        <div class="note ${noteOpen[key] || d.note ? "on" : ""}"><textarea data-notetext="${q.n}" placeholder="왜 그렇게 고르는지, 붙는 조건이 있는지">${esc(d.note)}</textarea></div>`;
+        <div class="note ${noteOpen[key] || d.note ? "on" : ""}" id="note-${q.n}"><textarea data-notetext="${q.n}" aria-label="Q${q.n} 메모" placeholder="왜 그렇게 고르는지, 붙는 조건이 있는지">${esc(d.note)}</textarea>${!d.note ? `<button class="note-toggle" data-notehide="${q.n}">메모 접기</button>` : ""}</div>`;
     return `<section class="card ${d.skip ? "skipped" : ""}" id="q-${q.n}">
-      <div class="ask">${head}<h2 class="q-title">${esc(q.title)}</h2><div class="q-body">${body(q.body)}</div>${why}</div>
+      <div class="ask">${head}<h2 class="q-title" id="qt-${q.n}">${esc(q.title)}</h2><div class="q-body">${body(q.body)}</div>${why}</div>
       <div class="answer">${answer}</div></section>`;
   }
 
@@ -542,14 +563,14 @@
       html = `<span class="done-badge">인터뷰 끝</span><div class="summary">${sanitize(md(state.summary))}</div>` + renderPast(past);
       document.title = `끝 · ${state.title || "grill"}`;
     } else if (!open) {
-      html = `<div class="waiting"><div class="spin"></div><div class="big">${past.length ? "다음 라운드를 준비하고 있어요" : "첫 라운드를 준비하고 있어요"}</div><div class="sub">답변을 읽고 다음 질문을 고르는 중이에요. 이 창은 그대로 두면 돼요.</div></div>` + renderPast(past);
+      html = `<div class="waiting" role="status" aria-live="polite" aria-busy="true"><div class="spin"></div><div class="big">${past.length ? "다음 라운드를 준비하고 있어요" : "첫 라운드를 준비하고 있어요"}</div><div class="sub">답변을 읽고 다음 질문을 고르는 중이에요. 이 창은 그대로 두면 돼요.</div></div>` + renderPast(past);
       document.title = `대기 중 · ${state.title || "grill"}`;
     } else {
       const qs = open.questions ?? [];
       const left = remaining();
       html = `<div class="caption">라운드 ${open.round} · 질문 ${qs.length}개</div><h2 class="round-title">${esc(open.intro || (past.length ? "이어서 몇 가지 더" : "먼저 큰 방향부터"))}</h2>` +
         qs.map((q) => renderQuestion(open, q)).join("") +
-        `<div class="bottom"><span class="hint">${hintText()}</span><button class="send" data-send ${left ? "disabled" : ""}>답변 보내기</button></div>` + renderPast(past);
+        `<div class="bottom"><span class="hint">${hintText()}</span><button class="send" data-send ${sendable() ? "" : "disabled"}>답변 보내기</button></div>` + renderPast(past);
       document.title = `라운드 ${open.round} · ${state.title || "grill"}`;
     }
     main.innerHTML = html;
@@ -558,13 +579,26 @@
   }
 
   function refreshProgress() {
-    const left = remaining();
-    for (const b of document.querySelectorAll("[data-send]")) b.disabled = left > 0;
+    for (const b of document.querySelectorAll("[data-send]")) b.disabled = !sendable() || sending;
     for (const h of document.querySelectorAll(".hint")) h.textContent = hintText();
     for (const q of currentRound.questions) {
       const mark = side.querySelector(`[data-jump="q-${q.n}"] .mark`);
-      if (mark) mark.classList.toggle("done", complete(q, draft(currentRound.round, q.n)));
+      const d = draft(currentRound.round, q.n);
+      if (mark) { mark.classList.toggle("skip", d.skip); mark.classList.toggle("done", !d.skip && complete(q, d)); }
     }
+  }
+
+  // 전체를 다시 그린 뒤 키보드 포커스를 같은 자리로 되돌린다. data-* 속성과 data-v로 요소를 다시 찾는다
+  function rerender() {
+    if (!lastState) return;
+    const a = document.activeElement;
+    const key = a && [...a.attributes].find((x) => x.name.startsWith("data-") && x.name !== "data-v");
+    const y = window.scrollY;
+    render(lastState);
+    window.scrollTo({ top: y });
+    if (!key) return;
+    const sel = `[${key.name}="${CSS.escape(key.value)}"]` + (a.dataset.v !== undefined ? `[data-v="${CSS.escape(a.dataset.v)}"]` : "");
+    document.querySelector(sel)?.focus({ preventScroll: true });
   }
 
   document.addEventListener("click", async (e) => {
@@ -583,20 +617,19 @@
     if (b.dataset.send !== undefined) return send();
     if (!currentRound) return;
     const r = currentRound.round;
-    const n = Number(b.dataset.set ?? b.dataset.toggle ?? b.dataset.other ?? b.dataset.rec ?? b.dataset.note ?? b.dataset.skip ?? b.dataset.unskip);
+    const n = Number(b.dataset.set ?? b.dataset.toggle ?? b.dataset.other ?? b.dataset.rec ?? b.dataset.note ?? b.dataset.notehide ?? b.dataset.skip ?? b.dataset.unskip);
     if (Number.isNaN(n)) return;
     const q = currentRound.questions.find((x) => x.n === n);
     const d = draft(r, n);
     if (b.dataset.set !== undefined) { d.value = b.dataset.v; d.other = false; }
     else if (b.dataset.toggle !== undefined) { const v = b.dataset.v; d.value = d.value.includes(v) ? d.value.filter((x) => x !== v) : [...d.value, v]; }
-    else if (b.dataset.other !== undefined) { d.other = true; d.value = ""; }
+    else if (b.dataset.other !== undefined) { if (!d.other) { d.other = true; d.value = ""; } }
     else if (b.dataset.rec !== undefined) { d.value = q.recommendation; }
     else if (b.dataset.note !== undefined) { noteOpen[`${r}:${n}`] = true; }
+    else if (b.dataset.notehide !== undefined) { noteOpen[`${r}:${n}`] = false; }
     else if (b.dataset.skip !== undefined) { d.skip = true; }
     else if (b.dataset.unskip !== undefined) { d.skip = false; }
-    const y = window.scrollY;
-    render(lastState);
-    window.scrollTo({ top: y });
+    rerender();
     if (b.dataset.other !== undefined) document.querySelector(`[data-othertext="${n}"]`)?.focus();
     if (b.dataset.note !== undefined) document.querySelector(`[data-notetext="${n}"]`)?.focus();
   });
@@ -612,7 +645,7 @@
       const n = Number(t.dataset.range), q = currentRound.questions.find((x) => x.n === n);
       draft(r, n).value = Number(t.value);
       const v = t.closest(".range").querySelector(".val");
-      v.classList.remove("empty");
+      v.classList.remove("empty"); t.classList.remove("empty");
       v.innerHTML = `${esc(t.value)}${q.unit ? `<small>${esc(q.unit)}</small>` : ""}`;
       refreshProgress();
     }
@@ -620,10 +653,16 @@
 
   async function send() {
     const r = currentRound;
-    if (!r || remaining() > 0 || sending) return;
+    if (!r || !sendable() || sending) return;
     sending = true;
     for (const b of document.querySelectorAll("[data-send]")) b.disabled = true;
-    const answers = r.questions.map((q) => { const d = draft(r.round, q.n); return d.skip ? { n: q.n, value: null, note: d.note.trim(), skipped: true } : { n: q.n, value: d.value, note: d.note.trim() }; });
+    const answers = r.questions.map((q) => {
+      const d = draft(r.round, q.n);
+      if (d.skip) return { n: q.n, value: null, note: d.note.trim(), skipped: true };
+      const a = { n: q.n, value: d.value, note: d.note.trim() };
+      if (q.kind === "choice" && d.other) a.other = true; // options 밖의 직접 쓴 답
+      return a;
+    });
     const res = await fetch("/api/answers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session: sessionId, round: r.round, rev: r.rev, answers }) }).catch(() => null);
     sending = false;
     if (!res || !res.ok) { toast(res ? (await res.json()).error ?? "보내지 못했어요" : "서버에 닿지 못했어요"); refreshProgress(); return; }
@@ -645,8 +684,10 @@
         revs[r.round] = r.rev;
       }
       const sig = JSON.stringify([s.session, s.title, s.summary, s.rounds.map((r) => [r.round, r.rev, !!r.answers])]);
+      const structure = JSON.stringify([s.session, !!s.summary, s.rounds.map((r) => [r.round, !!r.answers])]);
       const changed = sig !== last;
-      if (force || changed) { last = sig; lastState = s; render(s); if (changed) window.scrollTo({ top: 0 }); }
+      const moved = structure !== lastStructure; // 라운드가 새로 오거나 끝났을 때만 맨 위로. 같은 라운드 수정은 자리 유지
+      if (force || changed) { last = sig; lastStructure = structure; lastState = s; if (moved) render(s); else rerender(); if (moved) window.scrollTo({ top: 0 }); }
     } catch { /* 서버가 잠깐 없을 수 있다. 다음 폴링에서 다시 */ }
   }
   poll(true);

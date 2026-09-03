@@ -43,7 +43,7 @@ If `grilling` is not in the list of available skills, do not start the interview
 
    The answer JSON is printed to stdout. Read it and go back to step 2.
 
-4. Finish. When the user confirms the understanding is shared, write the agreed outcome as markdown to `~/.cache/grill-web/summary.md`. The form shows it as the closing screen. Leave a short version of the same summary in the terminal.
+4. Finish. The confirmation is itself a round in the form: one `yesno` question, "Do we share the same understanding?", with a short recap in its `body`. Only when that comes back `"yes"` do you write the agreed outcome as markdown to `~/.cache/grill-web/summary.md`. The form shows it as the closing screen. Leave a short version of the same summary in the terminal. Never take the confirmation from the terminal instead of the form.
 
 Between rounds, the terminal gets one line like "Round 2, 4 questions. Please answer in the browser." Do not repeat the questions in the terminal.
 
@@ -71,7 +71,7 @@ Between rounds, the terminal gets one line like "Round 2, 4 questions. Please an
 ```
 
 - `round` is taken from the file name; you do not need it in the file. `intro`, `body` and `why` are optional. `intro` is shown large as the round title, so keep it to one line.
-- `kind` is one of `yesno`, `choice`, `multi`, `range`, `text`. Two or more options: `choice`. Options that can overlap: `multi`. One number: `range`. Free text: `text`.
+- `kind` is exactly one of `yesno`, `choice`, `multi`, `range`, `text`. Anything else (a typo like `chocie`) makes the form show an error for that question and the server reject the round's answers. Two or more options: `choice`. Options that can overlap: `multi`. One number: `range`. Free text: `text`.
 - Always include `recommendation`. `yesno` takes `"yes"` or `"no"`, `choice` one of the `options`, `multi` an array, `range` a number, `text` a sentence. The form marks it and adds a one-click "take it" button.
 - `deferred: true` marks a question the user skipped in an earlier round. The form shows a small tag. Nothing else changes.
 - Phrase `title` positively. If the question is negated, the recommendation reads backwards. "Fix the count?" rather than "Leave the count unfixed?".
@@ -110,21 +110,24 @@ When markdown is not enough, make `body` an array. Strings are markdown; objects
 
 ```json
 {
+  "session": "8cbb7375-5611-43ce-84eb-2356772c4614",
   "round": 1,
+  "rev": "2c61370571d92168",
   "answers": [
     { "n": 1, "value": "Separate retry table", "note": "orders already has 40 columns" },
     { "n": 2, "value": "yes", "note": "" },
     { "n": 3, "value": ["Slack"], "note": "" },
     { "n": 4, "value": 10, "note": "" },
-    { "n": 5, "value": "5xx, timeouts, and 429", "note": "" }
+    { "n": 5, "value": "5xx, timeouts, and 429", "note": "" },
+    { "n": 6, "value": "Something the options did not offer", "note": "", "other": true }
   ],
   "submittedAt": "2026-09-03T02:11:08.000Z"
 }
 ```
 
-If the user picked "other" on a `choice`, `value` is a string that is not in `options`. `note` is the reason or condition the user attached. When it is not empty, it must shape the next round.
+`session`, `rev` and `submittedAt` are bookkeeping written by the server; read them if you like, never copy them into a round file. `other: true` on a `choice` means the user typed their own answer instead of picking an option, so `value` is not in `options`. `note` is the reason or condition the user attached. When it is not empty, it must shape the next round.
 
-The user can skip a question with "answer later". It comes back as `{ "n": 3, "value": null, "skipped": true, "note": "" }`. A skipped question is not a decision. Ask it again in the next round, or in a later one if another answer has to settle first. Keep the same `title`, reuse or sharpen the `body`, and set `"deferred": true` on it so the form marks it as a question the user put off. Drop it only when the user's other answers made it moot, and say so in the terminal.
+The user can skip a question with "answer later". It comes back as `{ "n": 3, "value": null, "skipped": true, "note": "" }`. A skipped question is not a decision. Before you write the next round, list every skipped question from the round you just read. Each one must either appear in the next round, be scheduled for a later round because another answer has to settle first, or be dropped because the user's other answers made it moot. When you re-ask, keep the same `title`, reuse or sharpen the `body`, and set `"deferred": true` so the form marks it. When you drop one, say so in the terminal in one line. Never let a skipped question silently disappear.
 
 ## Do not
 

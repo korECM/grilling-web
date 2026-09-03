@@ -129,11 +129,14 @@ Answers come back the same way:
 
 ```json
 {
+  "session": "8cbb7375-…",
   "round": 1,
+  "rev": "2c61370571d92168",
   "answers": [
     { "n": 1, "value": "Separate retry table", "note": "orders already has 40 columns" },
     { "n": 2, "value": 10, "note": "" }
-  ]
+  ],
+  "submittedAt": "2026-09-03T02:11:08.000Z"
 }
 ```
 
@@ -142,8 +145,10 @@ Question kinds: `yesno`, `choice`, `multi`, `range`, `text`. Body blocks: markdo
 ```
 skills/grill-web/
   SKILL.md         rules and schema. What the agent reads
-  ui/index.html    the form. One file, zero dependencies
+  ui/index.html    the form. No build step; Pretendard and mermaid load from a CDN
+  ui/sanitize.js   allowlist sanitizer for question bodies
   ui/server.ts     bun server. Serves the form, relays files, blocks on `wait`
+  ui/*.test.ts     bun test: server API contract, sanitizer cases
 ```
 
 ## Development

@@ -110,7 +110,10 @@ function validateAnswers(round: any, body: any): string[] {
     const v = a.value;
     switch (q.kind) {
       case "yesno": if (v !== "yes" && v !== "no") problems.push(`Q${q.n}: yes 또는 no여야 합니다`); break;
-      case "choice": if (typeof v !== "string" || !v.trim()) problems.push(`Q${q.n}: 선택값이 비었습니다`); break;
+      case "choice":
+        if (typeof v !== "string" || !v.trim()) problems.push(`Q${q.n}: 선택값이 비었습니다`);
+        else if (!(q.options ?? []).includes(v) && a.other !== true) problems.push(`Q${q.n}: options 밖의 값은 other: true와 함께 보내야 합니다`);
+        break;
       case "multi":
         if (!Array.isArray(v) || !v.length || v.some((x) => typeof x !== "string" || !(q.options ?? []).includes(x))) problems.push(`Q${q.n}: options 안의 값만 고를 수 있습니다`);
         break;
@@ -119,7 +122,8 @@ function validateAnswers(round: any, body: any): string[] {
         if (typeof v !== "number" || !Number.isFinite(v) || v < min || v > max) problems.push(`Q${q.n}: ${min}과 ${max} 사이 숫자여야 합니다`);
         break;
       }
-      default: if (typeof v !== "string" || !v.trim()) problems.push(`Q${q.n}: 답이 비었습니다`);
+      case "text": if (typeof v !== "string" || !v.trim()) problems.push(`Q${q.n}: 답이 비었습니다`); break;
+      default: problems.push(`Q${q.n}: 알 수 없는 kind "${q.kind}"`);
     }
   }
   for (const q of questions) if (!seen.has(q.n)) problems.push(`Q${q.n} 답이 없습니다`);
