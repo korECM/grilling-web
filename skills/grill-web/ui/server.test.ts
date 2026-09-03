@@ -29,7 +29,7 @@ const good = () => [
   { n: 5, value: "fine", note: "" },
 ];
 const state = async () => (await fetch(`${URL}/api/state`)).json();
-const post = (body: unknown) => fetch(`${URL}/api/answers`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const post = (body: unknown, headers: Record<string, string> = {}) => fetch(`${URL}/api/answers`, { method: "POST", headers: { "content-type": "application/json", origin: `http://127.0.0.1:${PORT}`, ...headers }, body: JSON.stringify(body) });
 const session = async () => (await state()).session as string;
 
 beforeAll(async () => {
@@ -53,7 +53,7 @@ describe("health and state", () => {
     expect(s.title).toBe("test topic");
     expect(s.rounds).toHaveLength(1);
     expect(s.rounds[0].round).toBe(1);
-    expect(typeof s.rounds[0].rev).toBe("number");
+    expect(typeof s.rounds[0].rev).toBe("string");
     expect(s.rounds[0].answers).toBeNull();
     expect(s.summary).toBeNull();
   });
@@ -71,10 +71,42 @@ describe("health and state", () => {
   });
 });
 
+describe("request origin", () => {
+  test("rejects a cross-site simple POST and a foreign origin", async () => {
+    const body = { session: await session(), round: 1, answers: good() };
+    const plain = await fetch(`${URL}/api/answers`, { method: "POST", headers: { "content-type": "text/plain" }, body: JSON.stringify(body) });
+    expect(plain.status).toBe(403);
+    expect((await post(body, { origin: "http://evil.example" })).status).toBe(403);
+    expect((await post(body, { host: "evil.example:80" })).status).toBe(403);
+  });
+  test("ignores non-numeric round files and cannot be overridden by file content", async () => {
+    writeFileSync(join(DIR, "rounds", "1.json.bak"), "{}");
+    writeFileSync(join(DIR, "rounds", "7.json"), JSON.stringify({ round: 99, rev: "x", answers: { fake: true }, questions: [] }));
+    const s = await state();
+    expect(s.rounds.map((r: any) => r.round)).toEqual([1, 7]);
+    const r7 = s.rounds.find((r: any) => r.round === 7);
+    expect(r7.answers).toBeNull();
+    expect(r7.rev).not.toBe("x");
+    rmSync(join(DIR, "rounds", "7.json")); rmSync(join(DIR, "rounds", "1.json.bak"));
+  });
+  test("skips a round file that is not valid JSON yet", async () => {
+    writeFileSync(join(DIR, "rounds", "8.json"), '{"questions": [');
+    expect((await state()).rounds.map((r: any) => r.round)).toEqual([1]);
+    rmSync(join(DIR, "rounds", "8.json"));
+  });
+});
+
 describe("answer validation", () => {
   test("rejects a missing or stale session", async () => {
     expect((await post({ round: 1, answers: good() })).status).toBe(409);
     expect((await post({ session: "stale", round: 1, answers: good() })).status).toBe(409);
+  });
+  test("rejects a submission made against an older revision of the round", async () => {
+    const res = await post({ session: await session(), round: 1, rev: "stale-rev", answers: good() });
+    expect(res.status).toBe(409);
+    const cur = (await state()).rounds[0].rev;
+    const ok = await post({ session: await session(), round: 1, rev: cur, answers: [{ n: 1, value: "A", note: "" }] });
+    expect(ok.status).toBe(400); // rev는 맞지만 답이 모자라서 400. rev 검사는 통과했다
   });
   test("rejects an unknown round", async () => {
     expect((await post({ session: await session(), round: 9, answers: [] })).status).toBe(404);

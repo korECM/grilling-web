@@ -35,21 +35,26 @@ function readJson(path: string) {
 function roundNumbers(): number[] {
   if (!existsSync(roundsDir())) return [];
   return readdirSync(roundsDir())
-    .map((f) => Number(f.replace(/\.json$/, "")))
-    .filter((n) => Number.isFinite(n))
+    .map((f) => /^(\d+)\.json$/.exec(f)?.[1])
+    .filter((m): m is string => m !== undefined)
+    .map(Number)
     .sort((a, b) => a - b);
+}
+
+// 라운드 파일의 판. 내용이 바뀌면 달라진다. 쓰는 도중 읽혀도 크기가 달라 다음 폴링에서 다시 그린다.
+function roundRev(path: string): string {
+  const st = statSync(path);
+  return `${Math.round(st.mtimeMs)}-${st.size}`;
 }
 
 function state() {
   const session = readJson(join(DIR, "session.json")) ?? { id: null, title: "" };
-  const rounds = roundNumbers().map((n) => {
+  const rounds = roundNumbers().flatMap((n) => {
     const path = join(roundsDir(), `${n}.json`);
-    return {
-      round: n,
-      rev: statSync(path).mtimeMs, // 같은 라운드를 고쳐 쓰면 바뀐다. 폼이 이 값으로 다시 그린다
-      ...readJson(path),
-      answers: readJson(join(answersDir(), `${n}.json`)),
-    };
+    const data = readJson(path);
+    if (!data || typeof data !== "object") return []; // 쓰는 도중이거나 깨진 파일. 다음 폴링에서 다시 본다
+    // round, rev, answers는 파일 내용이 덮어쓰지 못하게 뒤에 둔다
+    return [{ ...data, round: n, rev: roundRev(path), answers: readJson(join(answersDir(), `${n}.json`)) }];
   });
   const summaryPath = join(DIR, "summary.md");
   const summary = existsSync(summaryPath) ? readFileSync(summaryPath, "utf8") : null;
@@ -117,6 +122,14 @@ function serve() {
       if (pathname === "/api/health") return Response.json({ ok: true, app: "grill-web", dir: DIR });
       if (pathname === "/api/state") return Response.json(state());
       if (pathname === "/api/answers" && req.method === "POST") {
+        // 폼에서 온 요청만 받는다. 다른 사이트가 브라우저를 시켜 보내는 단순 POST(text/plain)와 DNS 리바인딩을 막는다.
+        const host = req.headers.get("host") ?? "";
+        const origin = req.headers.get("origin");
+        const ctype = req.headers.get("content-type") ?? "";
+        const localHosts = [`localhost:${PORT}`, `127.0.0.1:${PORT}`];
+        if (!localHosts.includes(host) || (origin && !localHosts.some((h) => origin === `http://${h}`)) || !ctype.startsWith("application/json")) {
+          return Response.json({ error: "이 폼에서 보낸 요청만 받습니다" }, { status: 403 });
+        }
         const body = await req.json().catch(() => null);
         const n = Number(body?.round);
         if (!Number.isFinite(n)) return Response.json({ error: "round가 필요합니다" }, { status: 400 });
@@ -124,8 +137,12 @@ function serve() {
         if (!body?.session || body.session !== current) {
           return Response.json({ error: "다른 세션의 답변입니다. 페이지를 새로 고치세요" }, { status: 409 });
         }
-        const round = readJson(join(roundsDir(), `${n}.json`));
+        const roundPath = join(roundsDir(), `${n}.json`);
+        const round = readJson(roundPath);
         if (!round) return Response.json({ error: `${n}라운드가 없습니다` }, { status: 404 });
+        if (body.rev !== undefined && body.rev !== roundRev(roundPath)) {
+          return Response.json({ error: "질문이 바뀌었습니다. 화면을 확인하고 다시 보내세요" }, { status: 409 });
+        }
         const problems = validateAnswers(round, body);
         if (problems.length) return Response.json({ error: problems.join(", ") }, { status: 400 });
         const path = join(answersDir(), `${n}.json`);

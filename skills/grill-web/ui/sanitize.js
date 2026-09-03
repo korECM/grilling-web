@@ -6,7 +6,7 @@
   const DROP = new Set(["script", "style", "iframe", "frame", "frameset", "object", "embed", "link", "meta", "base", "form", "input", "button", "textarea", "select", "option", "template", "noscript", "foreignobject", "animate", "animatemotion", "animatetransform", "set"]);
   const HTML_TAGS = new Set(["p", "br", "div", "span", "ul", "ol", "li", "strong", "em", "b", "i", "u", "s", "code", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "a", "img", "figure", "figcaption", "blockquote", "hr", "small", "sup", "sub", "mark", "kbd", "dl", "dt", "dd", "caption"]);
   const SVG_TAGS = new Set(["svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "text", "tspan", "textpath", "defs", "use", "marker", "lineargradient", "radialgradient", "stop", "clippath", "mask", "pattern", "symbol", "title", "desc", "image"]);
-  const GLOBAL_ATTRS = new Set(["class", "id", "title", "lang", "dir", "role", "style"]);
+  const GLOBAL_ATTRS = new Set(["class", "id", "title", "lang", "dir", "role"]);
   const ATTRS = {
     a: ["href", "target"],
     img: ["src", "alt", "width", "height", "loading"],
@@ -23,15 +23,13 @@
     if (tag === "img" || tag === "image") return SAFE_IMG.test(v);
     return SAFE_URL.test(v);
   }
-  function styleOk(value) {
-    return !/url\s*\(|expression\s*\(|javascript:|@import|behavior\s*:/i.test(value);
-  }
+  // style은 통째로 뺀다. CSS 이스케이프(u\72l)나 position:fixed 오버레이처럼 걸러내기 어려운 길이 많다.
+  // 폼이 필요로 하는 스타일은 전부 클래스로 건다.
   function attrOk(tag, isSvg, name, value) {
-    if (name.startsWith("on") || name === "srcdoc") return false;
-    if (name === "style") return styleOk(value);
+    if (name.startsWith("on") || name === "srcdoc" || name === "style") return false;
     if (URL_ATTRS.has(name)) return urlOk(tag, value);
     if (GLOBAL_ATTRS.has(name) || name.startsWith("aria-") || name.startsWith("data-")) return true;
-    if (isSvg) return true; // 프레젠테이션 속성(fill, stroke, d, x, y ...). 위험한 건 위에서 걸렀다
+    if (isSvg) return !/url\s*\(\s*(?!['"]?#)/i.test(value); // fill="url(#local)"만 허용. 외부 url()은 리소스 요청이 된다
     return (ATTRS[tag] ?? []).includes(name);
   }
 

@@ -103,6 +103,7 @@
 
   /* 블록: 나란히 비교 */
   .cmp { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 10px; margin: 12px 0; }
+  .cmp.n1 { grid-template-columns: 1fr; }
   .cmp-col { border: 1px solid var(--line-weak); border-radius: var(--r-xs); padding: 12px 14px; font-size: 14px; line-height: 20px; }
   .cmp-title { font-weight: 600; color: var(--ink); margin-bottom: 6px; }
   .cmp-col ul { margin: 0; padding-left: 18px; }
@@ -268,7 +269,7 @@
   const side = document.getElementById("side");
   const main = document.getElementById("main");
   const toastEl = document.getElementById("toast");
-  let last = null, lastState = null, currentRound = null, sessionId = null;
+  let last = null, lastState = null, currentRound = null, sessionId = null, sending = false;
   let drafts = {}, noteOpen = {};
   const svgCache = new Map();
   let mmSeq = 0;
@@ -343,7 +344,7 @@
       case "diff": return diffHtml(b.text);
       case "compare": {
         const cols = b.columns ?? [];
-        return `<div class="cmp" style="--n:${Math.min(cols.length, 4)}">${cols.map((c) => `<div class="cmp-col"><div class="cmp-title">${inline(c.title)}</div>${c.points?.length ? `<ul>${c.points.map((p) => `<li>${inline(p)}</li>`).join("")}</ul>` : ""}${c.note ? `<div class="cmp-note">${inline(c.note)}</div>` : ""}</div>`).join("")}</div>`;
+        return `<div class="cmp n${Math.min(cols.length, 4)}">${cols.map((c) => `<div class="cmp-col"><div class="cmp-title">${inline(c.title)}</div>${c.points?.length ? `<ul>${c.points.map((p) => `<li>${inline(p)}</li>`).join("")}</ul>` : ""}${c.note ? `<div class="cmp-note">${inline(c.note)}</div>` : ""}</div>`).join("")}</div>`;
       }
       case "steps": return `<ol class="steps">${(b.items ?? []).map((s) => typeof s === "string" ? `<li>${inline(s)}</li>` : `<li><span class="st">${inline(s.title)}</span>${s.text ? `<br>${inline(s.text)}` : ""}</li>`).join("")}</ol>`;
       case "callout": return `<div class="callout">${inline(b.text)}</div>`;
@@ -615,10 +616,13 @@
 
   async function send() {
     const r = currentRound;
-    if (!r || remaining() > 0) return;
+    if (!r || remaining() > 0 || sending) return;
+    sending = true;
+    for (const b of document.querySelectorAll("[data-send]")) b.disabled = true;
     const answers = r.questions.map((q) => { const d = draft(r.round, q.n); return d.skip ? { n: q.n, value: null, note: d.note.trim(), skipped: true } : { n: q.n, value: d.value, note: d.note.trim() }; });
-    const res = await fetch("/api/answers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session: sessionId, round: r.round, answers }) });
-    if (!res.ok) { toast((await res.json()).error ?? "보내지 못했어요"); return; }
+    const res = await fetch("/api/answers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session: sessionId, round: r.round, rev: r.rev, answers }) }).catch(() => null);
+    sending = false;
+    if (!res || !res.ok) { toast(res ? (await res.json()).error ?? "보내지 못했어요" : "서버에 닿지 못했어요"); refreshProgress(); return; }
     toast("보냈어요");
     await poll(true);
   }

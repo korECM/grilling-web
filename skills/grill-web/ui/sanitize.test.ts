@@ -45,13 +45,16 @@ describe("html", () => {
     // td는 표 밖에서 파서가 버리므로(브라우저와 같음) 표 안에서 검사한다
     expect(sanitize('<table><tbody><tr><td colspan="2" rowspan="3" bgcolor="red">t</td></tr></tbody></table>')).toBe('<table><tbody><tr><td colspan="2" rowspan="3">t</td></tr></tbody></table>');
   });
-  test("style survives unless it pulls in urls or expressions", () => {
-    expect(sanitize('<p style="color:red">t</p>')).toBe('<p style="color:red">t</p>');
-    expect(sanitize('<p style="background:url(http://x)">t</p>')).toBe("<p>t</p>");
-    expect(sanitize('<p style="width:expression(alert(1))">t</p>')).toBe("<p>t</p>");
+  test("style is always removed", () => {
+    expect(sanitize('<p style="color:red">t</p>')).toBe("<p>t</p>");
+    expect(sanitize('<p style="position:fixed;inset:0;z-index:999999;background:#fff">overlay</p>')).toBe("<p>overlay</p>");
+    expect(sanitize('<p style="background:u\\72l(https://x)">t</p>')).toBe("<p>t</p>");
+  });
+  test("protocol-relative links are kept (they resolve to http/https)", () => {
+    expect(sanitize('<a href="//example.com/x">x</a>')).toBe('<a href="//example.com/x" rel="noopener noreferrer">x</a>');
   });
   test("keeps the markup the form's own renderer produces", () => {
-    const md = '<div class="cmp" style="--n:2"><div class="cmp-col"><div class="cmp-title">A</div><ul><li>x</li></ul></div></div><div class="mm" data-src="flowchart LR"></div><pre class="diff"><span class="l add">+a</span></pre><ol class="steps"><li><span class="st">t</span><br>x</li></ol>';
+    const md = '<div class="cmp n2"><div class="cmp-col"><div class="cmp-title">A</div><ul><li>x</li></ul></div></div><div class="mm" data-src="flowchart LR"></div><pre class="diff"><span class="l add">+a</span></pre><ol class="steps"><li><span class="st">t</span><br>x</li></ol>';
     expect(sanitize(md)).toBe(md);
   });
   test("handles empty and null input", () => {
@@ -74,6 +77,9 @@ describe("svg", () => {
   });
   test("strips handlers and non-local use hrefs", () => {
     expect(sanitize('<svg><use href="#a" onload="x()"></use><use href="https://evil/x.svg#a"></use></svg>')).toBe('<svg><use href="#a"></use><use></use></svg>');
+  });
+  test("svg attributes may reference local url(#id) but not external resources", () => {
+    expect(sanitize('<svg><rect fill="url(#g)"></rect><rect fill="url(https://evil/x.svg#a)"></rect><rect style="fill:red"></rect></svg>')).toBe('<svg><rect fill="url(#g)"></rect><rect></rect><rect></rect></svg>');
   });
   test("image inside svg follows the image rules", () => {
     expect(sanitize('<svg><image href="https://x/y.png"></image><image href="javascript:x"></image></svg>')).toBe('<svg><image href="https://x/y.png"></image><image></image></svg>');
