@@ -57,30 +57,67 @@ function reset(title: string) {
   writeFileSync(join(DIR, "session.json"), JSON.stringify({ title, startedAt: new Date().toISOString() }, null, 2));
 }
 
-async function alive(): Promise<boolean> {
+// 포트 상태. "ours"는 grill-web이 떠 있음, "other"는 다른 프로세스가 점유, "free"는 비어 있음.
+async function portState(): Promise<"ours" | "other" | "free"> {
   try {
     const res = await fetch(`${URL}/api/health`, { signal: AbortSignal.timeout(500) });
-    return res.ok;
+    const body = await res.json().catch(() => null);
+    return body?.app === "grill-web" ? "ours" : "other";
   } catch {
-    return false;
+    return "free";
   }
+}
+
+// 답변이 라운드 파일과 맞는지 검사한다. 문제가 없으면 빈 배열.
+function validateAnswers(round: any, body: any): string[] {
+  const problems: string[] = [];
+  if (!Array.isArray(body?.answers)) return ["answers 배열이 없습니다"];
+  const questions: any[] = Array.isArray(round?.questions) ? round.questions : [];
+  const seen = new Set<number>();
+  for (const a of body.answers) {
+    const q = questions.find((x) => x.n === a?.n);
+    if (!q) { problems.push(`질문 ${a?.n}은 이 라운드에 없습니다`); continue; }
+    if (seen.has(q.n)) { problems.push(`질문 ${q.n} 답이 두 번 왔습니다`); continue; }
+    seen.add(q.n);
+    if (typeof a.note !== "string") problems.push(`Q${q.n}: note는 문자열이어야 합니다`);
+    if (a.skipped === true) { if (a.value !== null) problems.push(`Q${q.n}: 미룬 답은 value가 null이어야 합니다`); continue; }
+    const v = a.value;
+    switch (q.kind) {
+      case "yesno": if (v !== "yes" && v !== "no") problems.push(`Q${q.n}: yes 또는 no여야 합니다`); break;
+      case "choice": if (typeof v !== "string" || !v.trim()) problems.push(`Q${q.n}: 선택값이 비었습니다`); break;
+      case "multi":
+        if (!Array.isArray(v) || !v.length || v.some((x) => typeof x !== "string" || !(q.options ?? []).includes(x))) problems.push(`Q${q.n}: options 안의 값만 고를 수 있습니다`);
+        break;
+      case "range": {
+        const min = q.min ?? 0, max = q.max ?? 100;
+        if (typeof v !== "number" || !Number.isFinite(v) || v < min || v > max) problems.push(`Q${q.n}: ${min}과 ${max} 사이 숫자여야 합니다`);
+        break;
+      }
+      default: if (typeof v !== "string" || !v.trim()) problems.push(`Q${q.n}: 답이 비었습니다`);
+    }
+  }
+  for (const q of questions) if (!seen.has(q.n)) problems.push(`Q${q.n} 답이 없습니다`);
+  return problems;
 }
 
 function serve() {
   mkdirSync(roundsDir(), { recursive: true });
   mkdirSync(answersDir(), { recursive: true });
   Bun.serve({
+    hostname: "127.0.0.1",
     port: PORT,
     async fetch(req) {
       const { pathname } = new globalThis.URL(req.url);
-      if (pathname === "/api/health") return Response.json({ ok: true });
+      if (pathname === "/api/health") return Response.json({ ok: true, app: "grill-web" });
       if (pathname === "/api/state") return Response.json(state());
       if (pathname === "/api/answers" && req.method === "POST") {
-        const body = await req.json();
+        const body = await req.json().catch(() => null);
         const n = Number(body?.round);
-        if (!Number.isFinite(n) || !Array.isArray(body?.answers)) {
-          return Response.json({ error: "round와 answers가 필요합니다" }, { status: 400 });
-        }
+        if (!Number.isFinite(n)) return Response.json({ error: "round가 필요합니다" }, { status: 400 });
+        const round = readJson(join(roundsDir(), `${n}.json`));
+        if (!round) return Response.json({ error: `${n}라운드가 없습니다` }, { status: 404 });
+        const problems = validateAnswers(round, body);
+        if (problems.length) return Response.json({ error: problems.join(", ") }, { status: 400 });
         const path = join(answersDir(), `${n}.json`);
         if (existsSync(path)) return Response.json({ error: "이미 보낸 라운드입니다" }, { status: 409 });
         writeFileSync(path, JSON.stringify({ ...body, submittedAt: new Date().toISOString() }, null, 2));
@@ -94,14 +131,19 @@ function serve() {
 }
 
 async function up(title: string) {
+  const state = await portState();
+  if (state === "other") {
+    console.error(`포트 ${PORT}를 다른 프로세스가 쓰고 있습니다. GRILL_WEB_PORT로 다른 포트를 지정하세요.`);
+    process.exit(2);
+  }
   reset(title);
-  if (!(await alive())) {
+  if (state === "free") {
     const child = Bun.spawn([process.execPath, import.meta.path, "serve"], {
       stdio: ["ignore", "ignore", "ignore"],
       detached: true,
     });
     child.unref();
-    for (let i = 0; i < 40 && !(await alive()); i++) await Bun.sleep(100);
+    for (let i = 0; i < 40 && (await portState()) !== "ours"; i++) await Bun.sleep(100);
   }
   const opener = process.platform === "darwin" ? "open" : "xdg-open";
   Bun.spawn([opener, URL], { stdio: ["ignore", "ignore", "ignore"] }).unref();

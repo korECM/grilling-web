@@ -27,6 +27,8 @@ grill-web keeps the interview and throws out the terminal. Questions open in a b
 
 **Built for wide screens.** Question on the left, answer on the right, previous rounds folded below. On a narrow window they stack vertically.
 
+**Skip and come back.** Not sure yet? Put a question off with one click. It comes back in a later round, marked as deferred, once the answers around it have settled.
+
 **Take it with you.** Copy the whole session as markdown at any point. Paste it into a spec, a ticket, or another agent.
 
 ## Quick start

@@ -73,6 +73,7 @@ Between rounds, the terminal gets one line like "Round 2, 4 questions. Please an
 - `round` is taken from the file name; you do not need it in the file. `intro`, `body` and `why` are optional. `intro` is shown large as the round title, so keep it to one line.
 - `kind` is one of `yesno`, `choice`, `multi`, `range`, `text`. Two or more options: `choice`. Options that can overlap: `multi`. One number: `range`. Free text: `text`.
 - Always include `recommendation`. `yesno` takes `"yes"` or `"no"`, `choice` one of the `options`, `multi` an array, `range` a number, `text` a sentence. The form marks it and adds a one-click "take it" button.
+- `deferred: true` marks a question the user skipped in an earlier round. The form shows a small tag. Nothing else changes.
 - Phrase `title` positively. If the question is negated, the recommendation reads backwards. "Fix the count?" rather than "Leave the count unfixed?".
 
 ## Pictures in the body
@@ -101,7 +102,7 @@ When markdown is not enough, make `body` an array. Strings are markdown; objects
 ]
 ```
 
-`svg` and `html` are escape hatches. Use them only when none of the blocks above can draw what you need. They cost tokens if used on every question.
+`svg` and `html` are escape hatches. Use them only when none of the blocks above can draw what you need. They cost tokens if used on every question. The form strips scripts, frames, forms, `on*` handlers and `javascript:` URLs from them, but do not paste markup from external documents or user-supplied content into these blocks; describe it in markdown instead.
 
 `summary.md` takes the same markdown. Drawing the agreed flow once as mermaid makes it quick to revisit later.
 
@@ -122,6 +123,8 @@ When markdown is not enough, make `body` an array. Strings are markdown; objects
 ```
 
 If the user picked "other" on a `choice`, `value` is a string that is not in `options`. `note` is the reason or condition the user attached. When it is not empty, it must shape the next round.
+
+The user can skip a question with "answer later". It comes back as `{ "n": 3, "value": null, "skipped": true, "note": "" }`. A skipped question is not a decision. Ask it again in the next round, or in a later one if another answer has to settle first. Keep the same `title`, reuse or sharpen the `body`, and set `"deferred": true` on it so the form marks it as a question the user put off. Drop it only when the user's other answers made it moot, and say so in the terminal.
 
 ## Do not
 
