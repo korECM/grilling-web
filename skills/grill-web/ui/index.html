@@ -278,7 +278,7 @@
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, text, href) => /^\s*(javascript|vbscript|data):/i.test(href) ? text : `<a href="${href}" target="_blank" rel="noopener">${text}</a>`);
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
 
   // 작은 마크다운. 문단, 제목, 목록, 표, 이미지, 코드블록, mermaid 펜스, 인라인 코드, 굵게, 링크.
   function md(src) {
@@ -348,12 +348,13 @@
       case "steps": return `<ol class="steps">${(b.items ?? []).map((s) => typeof s === "string" ? `<li>${inline(s)}</li>` : `<li><span class="st">${inline(s.title)}</span>${s.text ? `<br>${inline(s.text)}` : ""}</li>`).join("")}</ol>`;
       case "callout": return `<div class="callout">${inline(b.text)}</div>`;
       case "img": return `<figure><img alt="${esc(b.alt)}" src="${esc(b.src)}">${b.caption ? `<figcaption>${inline(b.caption)}</figcaption>` : ""}</figure>`;
-      case "svg": return `<div class="fig">${sanitize(b.svg)}</div>`;
-      case "html": return `<div class="raw">${sanitize(b.html)}</div>`;
+      case "svg": return `<div class="fig">${b.svg ?? ""}</div>`;
+      case "html": return `<div class="raw">${b.html ?? ""}</div>`;
       default: return `<pre>${esc(JSON.stringify(b, null, 2))}</pre>`;
     }
   }
-  const body = (v) => (Array.isArray(v) ? v : [v]).map(block).join("");
+  // 마크다운, 블록, raw 전부 한 번에 정제한다. URL 허용 목록은 sanitize.js 한 곳에만 있다.
+  const body = (v) => sanitize((Array.isArray(v) ? v : [v]).map(block).join(""));
 
   async function hydrateMermaid() {
     const boxes = [...document.querySelectorAll(".mm[data-src]:empty")];
@@ -385,6 +386,32 @@
   }
 
   const kindOf = (n) => currentRound?.questions?.find((q) => q.n === n)?.kind;
+  const revs = {}; // round -> 마지막으로 본 rev
+
+  // 라운드 파일이 고쳐졌을 때 기존 초안을 새 질문과 대조한다. 안 맞는 초안은 버리거나 잘라낸다.
+  function reconcileDrafts(r) {
+    const d = drafts[r.round];
+    if (!d) return;
+    for (const n of Object.keys(d)) {
+      const q = (r.questions ?? []).find((x) => x.n === Number(n));
+      const cur = d[n];
+      if (!q) { delete d[n]; continue; }
+      const fresh = { value: q.kind === "multi" ? [] : "", note: cur.note ?? "", other: false, skip: !!cur.skip };
+      if (q.kind === "multi") {
+        if (!Array.isArray(cur.value)) { d[n] = fresh; continue; }
+        cur.value = cur.value.filter((v) => (q.options ?? []).includes(v));
+      } else if (q.kind === "choice") {
+        if (typeof cur.value !== "string" || (!cur.other && cur.value !== "" && !(q.options ?? []).includes(cur.value))) d[n] = fresh;
+      } else if (q.kind === "yesno") {
+        if (cur.value !== "" && cur.value !== "yes" && cur.value !== "no") d[n] = fresh;
+      } else if (q.kind === "range") {
+        if (cur.value !== "" && (typeof cur.value !== "number" || cur.value < (q.min ?? 0) || cur.value > (q.max ?? 100))) d[n] = fresh;
+      } else if (typeof cur.value !== "string") {
+        d[n] = fresh;
+      }
+      if (d[n].other && q.kind !== "choice") d[n] = fresh;
+    }
+  }
   function draft(round, n) {
     drafts[round] ??= {};
     drafts[round][n] ??= { value: kindOf(n) === "multi" ? [] : "", note: "", other: false, skip: false };
@@ -507,7 +534,7 @@
     currentRound = open;
     let html = "";
     if (state.summary) {
-      html = `<span class="done-badge">인터뷰 끝</span><div class="summary">${md(state.summary)}</div>` + renderPast(past);
+      html = `<span class="done-badge">인터뷰 끝</span><div class="summary">${sanitize(md(state.summary))}</div>` + renderPast(past);
       document.title = `끝 · ${state.title || "grill"}`;
     } else if (!open) {
       html = `<div class="waiting"><div class="spin"></div><div class="big">${past.length ? "다음 라운드를 준비하고 있어요" : "첫 라운드를 준비하고 있어요"}</div><div class="sub">답변을 읽고 다음 질문을 고르는 중이에요. 이 창은 그대로 두면 돼요.</div></div>` + renderPast(past);
@@ -601,6 +628,10 @@
       const s = await (await fetch("/api/state", { cache: "no-store" })).json();
       // 세션이 바뀌면(새 인터뷰 시작) 이 탭의 초안은 버린다. 라운드는 rev로 내용 변경까지 잡는다.
       if (s.session !== sessionId) { sessionId = s.session; drafts = {}; noteOpen = {}; }
+      for (const r of s.rounds) {
+        if (revs[r.round] !== undefined && revs[r.round] !== r.rev) reconcileDrafts(r);
+        revs[r.round] = r.rev;
+      }
       const sig = JSON.stringify([s.session, s.title, s.summary, s.rounds.map((r) => [r.round, r.rev, !!r.answers])]);
       const changed = sig !== last;
       if (force || changed) { last = sig; lastState = s; render(s); if (changed) window.scrollTo({ top: 0 }); }

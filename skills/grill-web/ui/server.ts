@@ -63,12 +63,12 @@ function reset(title: string) {
   writeFileSync(join(DIR, "session.json"), JSON.stringify({ id: randomUUID(), title, startedAt: new Date().toISOString() }, null, 2));
 }
 
-// 포트 상태. "ours"는 grill-web이 떠 있음, "other"는 다른 프로세스가 점유, "free"는 비어 있음.
+// 포트 상태. "ours"는 같은 상태 폴더를 쓰는 grill-web이 떠 있음, "other"는 다른 프로세스(다른 폴더의 grill-web 포함)가 점유, "free"는 비어 있음.
 async function portState(): Promise<"ours" | "other" | "free"> {
   try {
     const res = await fetch(`${URL}/api/health`, { signal: AbortSignal.timeout(500) });
     const body = await res.json().catch(() => null);
-    return body?.app === "grill-web" ? "ours" : "other";
+    return body?.app === "grill-web" && body?.dir === DIR ? "ours" : "other";
   } catch {
     return "free";
   }
@@ -114,7 +114,7 @@ function serve() {
     port: PORT,
     async fetch(req) {
       const { pathname } = new globalThis.URL(req.url);
-      if (pathname === "/api/health") return Response.json({ ok: true, app: "grill-web" });
+      if (pathname === "/api/health") return Response.json({ ok: true, app: "grill-web", dir: DIR });
       if (pathname === "/api/state") return Response.json(state());
       if (pathname === "/api/answers" && req.method === "POST") {
         const body = await req.json().catch(() => null);
@@ -144,7 +144,7 @@ function serve() {
 async function up(title: string) {
   const state = await portState();
   if (state === "other") {
-    console.error(`포트 ${PORT}를 다른 프로세스가 쓰고 있습니다. GRILL_WEB_PORT로 다른 포트를 지정하세요.`);
+    console.error(`포트 ${PORT}를 다른 프로세스가 쓰고 있습니다(다른 상태 폴더의 grill-web일 수도 있습니다). GRILL_WEB_PORT로 다른 포트를 지정하거나 그 프로세스를 끄세요.`);
     process.exit(2);
   }
   reset(title);

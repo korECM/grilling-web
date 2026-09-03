@@ -49,6 +49,10 @@ describe("html", () => {
     expect(sanitize('<p style="background:url(http://x)">t</p>')).toBe("<p>t</p>");
     expect(sanitize('<p style="width:expression(alert(1))">t</p>')).toBe("<p>t</p>");
   });
+  test("keeps the markup the form's own renderer produces", () => {
+    const md = '<div class="cmp" style="--n:2"><div class="cmp-col"><div class="cmp-title">A</div><ul><li>x</li></ul></div></div><div class="mm" data-src="flowchart LR"></div><pre class="diff"><span class="l add">+a</span></pre><ol class="steps"><li><span class="st">t</span><br>x</li></ol>';
+    expect(sanitize(md)).toBe(md);
+  });
   test("handles empty and null input", () => {
     expect(sanitize("")).toBe("");
     expect(sanitize(null as any)).toBe("");

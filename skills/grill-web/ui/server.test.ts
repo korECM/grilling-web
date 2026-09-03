@@ -45,7 +45,7 @@ afterAll(() => { proc.kill(); rmSync(DIR, { recursive: true, force: true }); });
 
 describe("health and state", () => {
   test("health identifies itself as grill-web", async () => {
-    expect(await (await fetch(`${URL}/api/health`)).json()).toEqual({ ok: true, app: "grill-web" });
+    expect(await (await fetch(`${URL}/api/health`)).json()).toEqual({ ok: true, app: "grill-web", dir: DIR });
   });
   test("state carries session id, title, rounds with rev", async () => {
     const s = await state();
@@ -117,6 +117,16 @@ describe("answer validation", () => {
     writeFileSync(join(DIR, "rounds", "2.json"), JSON.stringify({ questions: [{ n: 1, title: "pick", kind: "choice", options: ["A"], recommendation: "A" }] }));
     const res = await post({ session: await session(), round: 2, answers: [{ n: 1, value: "something else", note: "" }] });
     expect(res.status).toBe(200);
+  });
+});
+
+describe("server reuse", () => {
+  test("up refuses a port held by a grill-web with a different state dir", async () => {
+    const other = mkdtempSync(join(tmpdir(), "grill-web-other-"));
+    const r = Bun.spawnSync([process.execPath, SERVER, "up", "x"], { env: { ...env, GRILL_WEB_DIR: other }, stdout: "pipe", stderr: "pipe" });
+    rmSync(other, { recursive: true, force: true });
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr.toString()).toContain("GRILL_WEB_PORT");
   });
 });
 
