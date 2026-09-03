@@ -23,6 +23,8 @@ const URL = urlFor(PORT);
 const HTML = join(import.meta.dir, "index.html");
 const SANITIZE_JS = join(import.meta.dir, "sanitize.js");
 
+const MARKER = () => join(DIR, ".grill-web"); // 이 폴더가 grill-web 것이라는 표식. 없는 비어 있지 않은 폴더는 건드리지 않는다
+const LOCK = () => join(DIR, ".lock");
 const roundsDir = () => join(DIR, "rounds");
 const answersDir = () => join(DIR, "answers");
 
@@ -65,17 +67,44 @@ function state() {
   const rounds = roundNumbers().flatMap((n) => {
     const r = readRound(join(roundsDir(), `${n}.json`));
     if (!r) return []; // 쓰는 도중이거나 깨진 파일. 다음 폴링에서 다시 본다
-    // round, rev, answers는 파일 내용이 덮어쓰지 못하게 뒤에 둔다
-    return [{ ...r.data, round: n, rev: r.rev, answers: readJson(join(answersDir(), `${n}.json`)) }];
+    // round, rev, answers는 파일 내용이 덮어쓰지 못하게 뒤에 둔다. 답은 지금 판(rev)에 대한 것일 때만 붙인다
+    const ans = readJson(join(answersDir(), `${n}.json`));
+    return [{ ...r.data, round: n, rev: r.rev, answers: ans && ans.rev === r.rev ? ans : null }];
   });
   const summaryPath = join(DIR, "summary.md");
   const summary = existsSync(summaryPath) ? readFileSync(summaryPath, "utf8") : null;
   return { session: session.id, title: session.title, rounds, summary };
 }
 
-// grill-web이 만든 것만 지운다. 상태 폴더 자체는 건드리지 않는다. GRILL_WEB_DIR이 엉뚱한 곳을 가리켜도 남의 파일은 안전하다.
-function reset(title: string) {
+// 상태 폴더가 grill-web 것인지 확인한다. 새 폴더나 빈 폴더면 표식을 남기고, 남의 파일이 든 폴더면 멈춘다.
+function ensureOwned() {
   mkdirSync(DIR, { recursive: true });
+  if (existsSync(MARKER())) return;
+  if (readdirSync(DIR).length > 0) {
+    console.error(`${DIR} 은 grill-web 폴더가 아닙니다(표식 없음, 파일 있음). 비어 있는 폴더나 전용 폴더를 GRILL_WEB_DIR로 지정하세요.`);
+    process.exit(2);
+  }
+  writeFileSync(MARKER(), "grill-web state directory\n");
+}
+
+// 폴더 단위 배타 잠금. mkdir은 원자적이라 동시에 두 up이 들어와도 하나만 잡는다. 30초 넘은 잠금은 죽은 프로세스 것으로 보고 거둔다.
+async function withLock<T>(fn: () => Promise<T>): Promise<T> {
+  ensureOwned();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { mkdirSync(LOCK()); break; } catch (e: any) {
+      if (e?.code !== "EEXIST") throw e;
+      const age = Date.now() - statSync(LOCK()).mtimeMs;
+      if (age > 30_000 && attempt === 0) { rmSync(LOCK(), { recursive: true, force: true }); continue; }
+      console.error(`다른 grill-web 명령이 ${DIR} 을 쓰는 중입니다. 잠시 뒤 다시 하세요.`);
+      process.exit(5);
+    }
+  }
+  try { return await fn(); } finally { rmSync(LOCK(), { recursive: true, force: true }); }
+}
+
+// grill-web이 만든 것만 지운다. 상태 폴더 자체는 건드리지 않는다.
+function reset(title: string) {
+  ensureOwned();
   for (const child of ["rounds", "answers"]) rmSync(join(DIR, child), { recursive: true, force: true });
   for (const f of ["session.json", "summary.md"]) rmSync(join(DIR, f), { force: true });
   mkdirSync(roundsDir(), { recursive: true });
@@ -131,6 +160,7 @@ function validateAnswers(round: any, body: any): string[] {
 }
 
 function serve() {
+  ensureOwned();
   mkdirSync(roundsDir(), { recursive: true });
   mkdirSync(answersDir(), { recursive: true });
   // 이 폴더를 어느 서버가 맡고 있는지 남긴다. up이 다른 포트의 살아 있는 서버를 찾아 재사용하는 근거
@@ -166,7 +196,9 @@ function serve() {
         const problems = validateAnswers(r.data, body);
         if (problems.length) return Response.json({ error: problems.join(", ") }, { status: 400 });
         const path = join(answersDir(), `${n}.json`);
-        if (existsSync(path)) return Response.json({ error: "이미 보낸 라운드입니다" }, { status: 409 });
+        const prev = readJson(path);
+        if (prev && prev.rev === r.rev) return Response.json({ error: "이미 보낸 라운드입니다" }, { status: 409 });
+        // 옛 판에 대한 답이 남아 있으면(질문이 바뀐 뒤) 덮어쓴다
         // 어느 세션의 어느 판에 대한 답인지 함께 남긴다. wait가 이걸로 남의 답을 거른다
         writeAtomic(path, JSON.stringify({ session: current, round: n, rev: r.rev, answers: body.answers, submittedAt: new Date().toISOString() }, null, 2));
         return Response.json({ ok: true });
@@ -180,32 +212,42 @@ function serve() {
 }
 
 async function up(title: string) {
-  // 이 폴더를 이미 맡고 있는 서버가 다른 포트에 살아 있으면 그쪽을 쓴다. 한 폴더에 서버 둘이 붙는 일을 막는다
-  let port = PORT;
-  const owner = readJson(join(DIR, "server.json"));
-  if (owner?.port && owner.port !== PORT && (await portState(owner.port)) === "ours") port = owner.port;
-  const state = await portState(port);
-  if (state === "other") {
-    console.error(`포트 ${port}를 다른 프로세스가 쓰고 있습니다(다른 상태 폴더의 grill-web일 수도 있습니다). GRILL_WEB_PORT로 다른 포트를 지정하거나 그 프로세스를 끄세요.`);
-    process.exit(2);
+  const port = await withLock(async () => {
+    // 이 폴더를 이미 맡고 있는 서버가 다른 포트에 살아 있으면 그쪽을 쓴다. 한 폴더에 서버 둘이 붙는 일을 막는다
+    let port = PORT;
+    const owner = readJson(join(DIR, "server.json"));
+    if (owner?.port && owner.port !== PORT && (await portState(owner.port)) === "ours") port = owner.port;
+    const state = await portState(port);
+    if (state === "other") {
+      console.error(`포트 ${port}를 다른 프로세스가 쓰고 있습니다(다른 상태 폴더의 grill-web일 수도 있습니다). GRILL_WEB_PORT로 다른 포트를 지정하거나 그 프로세스를 끄세요.`);
+      process.exit(2);
+    }
+    reset(title);
+    if (state === "free") {
+      const child = Bun.spawn([process.execPath, import.meta.path, "serve"], {
+        stdio: ["ignore", "ignore", "ignore"],
+        detached: true,
+        env: { ...process.env, GRILL_WEB_PORT: String(port) },
+      });
+      child.unref();
+      for (let i = 0; i < 40 && (await portState(port)) !== "ours"; i++) await Bun.sleep(100);
+    }
+    return port;
+  });
+  if (!process.env.GRILL_WEB_NO_OPEN) {
+    const opener = process.platform === "darwin" ? "open" : "xdg-open";
+    Bun.spawn([opener, urlFor(port)], { stdio: ["ignore", "ignore", "ignore"] }).unref();
   }
-  reset(title);
-  if (state === "free") {
-    const child = Bun.spawn([process.execPath, import.meta.path, "serve"], {
-      stdio: ["ignore", "ignore", "ignore"],
-      detached: true,
-    });
-    child.unref();
-    for (let i = 0; i < 40 && (await portState(port)) !== "ours"; i++) await Bun.sleep(100);
-  }
-  const opener = process.platform === "darwin" ? "open" : "xdg-open";
-  Bun.spawn([opener, urlFor(port)], { stdio: ["ignore", "ignore", "ignore"] }).unref();
-  console.log(`${urlFor(port)} 열었습니다. 라운드는 ${roundsDir()}/<n>.json 에 쓰세요.`);
+  console.log(`${urlFor(port)} 열었습니다. 상태 폴더: ${DIR}. 라운드는 ${roundsDir()}/<n>.json 에 쓰세요.`);
 }
 
 async function wait(n: number, maxSeconds = 570) {
   const path = join(answersDir(), `${n}.json`);
+  const roundPath = join(roundsDir(), `${n}.json`);
   const sessionId = readJson(join(DIR, "session.json"))?.id ?? null;
+  const rev = readRound(roundPath)?.rev ?? null;
+  if (!rev) { console.error(`${roundPath} 이 없거나 JSON이 아닙니다.`); process.exit(1); }
+  console.error(`기다리는 중: ${n}라운드 (${rev})`);
   const deadline = Date.now() + maxSeconds * 1000;
   while (Date.now() < deadline) {
     // 기다리는 사이 새 인터뷰가 시작됐으면 이 라운드는 끝난 것이다. 남의 답을 집어 오지 않는다
@@ -213,8 +255,13 @@ async function wait(n: number, maxSeconds = 570) {
       console.error("기다리는 동안 새 세션이 시작됐습니다. 이 라운드는 버리고 처음부터 다시 진행하세요.");
       process.exit(4);
     }
+    // 라운드 파일이 바뀌었으면 지금 기다리는 판은 무효다. 새 판으로 다시 기다린다
+    if ((readRound(roundPath)?.rev ?? null) !== rev) {
+      console.error(`${n}라운드 파일이 바뀌었습니다. wait ${n} 을 다시 실행하세요.`);
+      process.exit(6);
+    }
     const answer = readJson(path);
-    if (answer) {
+    if (answer && answer.rev === rev) {
       if (answer.session !== sessionId) {
         console.error("다른 세션의 답변 파일입니다. 처음부터 다시 진행하세요.");
         process.exit(4);
@@ -237,7 +284,7 @@ switch (cmd) {
     serve();
     break;
   case "reset":
-    reset(arg ?? "");
+    await withLock(async () => reset(arg ?? ""));
     console.log(`초기화: ${DIR}`);
     break;
   case "wait":

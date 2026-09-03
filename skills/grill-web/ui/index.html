@@ -213,6 +213,8 @@
 
   .toast { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); background: var(--ink); color: #fff; font-size: 14px; padding: 10px 16px; border-radius: var(--r-xs); opacity: 0; pointer-events: none; transition: opacity .2s; }
   .toast.show { opacity: 1; }
+  .offline { position: fixed; left: 0; right: 0; top: 0; padding: 10px 16px; text-align: center; font-size: 14px; background: var(--critical); color: #fff; z-index: 10; }
+  .offline[hidden] { display: none; }
 
   @media (max-width: 1180px) {
     .shell { grid-template-columns: 1fr; gap: 24px; padding: 32px clamp(20px, 4vw, 48px) 100px; }
@@ -227,6 +229,8 @@
   }
   @media (max-width: 640px) {
     .card { padding: 20px; }
+    .bottom { flex-direction: column; align-items: stretch; }
+    .bottom .send { width: 100%; }
     .side-cta { width: 100%; margin: 8px 0 0; }
     .side-cta .send { flex: 1; }
   }
@@ -238,6 +242,7 @@
   <main id="main"></main>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="offline" id="offline" role="alert" hidden>서버와 연결이 끊겼어요. 에이전트가 서버를 다시 띄우면 저절로 이어져요.</div>
 
 <script src="/sanitize.js"></script>
 <script type="module">
@@ -415,7 +420,8 @@
       if (d[n].other && q.kind !== "choice") d[n] = fresh;
     }
   }
-  const fpOf = (q) => `${q.kind}|${q.title}|${(q.options ?? []).join("\u0001")}`;
+  // 답을 정하는 데 쓰이는 필드 전부. 하나라도 바뀌면 다른 질문으로 본다
+  const fpOf = (q) => JSON.stringify([q.kind, q.title, q.options, q.min, q.max, q.step, q.unit, q.recommendation, q.body, q.why]);
   function draft(round, n) {
     drafts[round] ??= {};
     const q = currentRound?.questions?.find((x) => x.n === n);
@@ -509,7 +515,8 @@
       return [multi ? "여러 개 골라도 돼요" : "하나 고르기", `<div class="opts" role="${multi ? "group" : "radiogroup"}" ${lb}>${opts}${other}</div>`];
     }
     if (q.kind === "range") {
-      const min = q.min ?? 0, max = q.max ?? 100, step = q.step ?? 1;
+      const num = (v, d) => (Number.isFinite(Number(v)) && v !== null && v !== "" ? Number(v) : d); // 숫자만 속성에 넣는다
+      const min = num(q.min, 0), max = num(q.max, 100), step = num(q.step, 1);
       const has = d.value !== "";
       const rec = q.recommendation != null ? `<div class="rec"><span class="tag">추천</span><div class="txt">${esc(q.recommendation)}${esc(q.unit ?? "")}</div><button data-rec="${q.n}">이대로</button></div>` : "";
       // 아직 안 골랐으면 손잡이를 끝에 두고 흐리게. 추천값 자리에 두면 고른 것처럼 보인다
@@ -553,7 +560,10 @@
         }).join("")}</div></details>`).join("") + `</div>`;
   }
 
+  // 라운드 파일은 에이전트가 쓴 것이라 형태를 믿지 않는다. 속성에 들어가는 값은 여기서 타입을 맞춘다
+  const normQ = (q) => ({ ...q, n: Number(q.n), title: String(q.title ?? ""), kind: String(q.kind ?? ""), options: Array.isArray(q.options) ? q.options.map(String) : undefined });
   function render(state) {
+    for (const r of state.rounds ?? []) if (Array.isArray(r.questions) && !r.__norm) { r.questions = r.questions.map(normQ); r.__norm = true; }
     const rounds = state.rounds ?? [];
     const open = rounds.find((r) => !r.answers) ?? null;
     const past = rounds.filter((r) => r.answers);
@@ -665,7 +675,7 @@
     });
     const res = await fetch("/api/answers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session: sessionId, round: r.round, rev: r.rev, answers }) }).catch(() => null);
     sending = false;
-    if (!res || !res.ok) { toast(res ? (await res.json()).error ?? "보내지 못했어요" : "서버에 닿지 못했어요"); refreshProgress(); return; }
+    if (!res || !res.ok) { const err = res ? await res.json().catch(() => ({})) : null; toast(err?.error ?? (res ? `보내지 못했어요 (${res.status})` : "서버에 닿지 못했어요")); refreshProgress(); return; }
     toast("보냈어요");
     await poll(true);
   }
@@ -688,7 +698,13 @@
       const changed = sig !== last;
       const moved = structure !== lastStructure; // 라운드가 새로 오거나 끝났을 때만 맨 위로. 같은 라운드 수정은 자리 유지
       if (force || changed) { last = sig; lastStructure = structure; lastState = s; if (moved) render(s); else rerender(); if (moved) window.scrollTo({ top: 0 }); }
-    } catch { /* 서버가 잠깐 없을 수 있다. 다음 폴링에서 다시 */ }
+      pollFailures = 0; offline(false);
+    } catch { if (++pollFailures >= 3) offline(true); /* 서버가 잠깐 없을 수 있다. 다음 폴링에서 다시 */ }
+  }
+  let pollFailures = 0;
+  function offline(on) {
+    const el = document.getElementById("offline");
+    if (el) el.hidden = !on;
   }
   poll(true);
   setInterval(() => poll(false), 1500);

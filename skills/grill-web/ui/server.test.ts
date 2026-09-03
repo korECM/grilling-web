@@ -1,6 +1,6 @@
 // server.ts API 계약 테스트. 임시 디렉토리와 임의 포트로 서버를 띄운다.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync, mkdirSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,7 +8,15 @@ const PORT = 47000 + Math.floor(Math.random() * 1000);
 const URL = `http://127.0.0.1:${PORT}`;
 const DIR = mkdtempSync(join(tmpdir(), "grill-web-test-"));
 const SERVER = join(import.meta.dir, "server.ts");
-const env = { ...process.env, GRILL_WEB_PORT: String(PORT), GRILL_WEB_DIR: DIR };
+const env = { ...process.env, GRILL_WEB_PORT: String(PORT), GRILL_WEB_DIR: DIR, GRILL_WEB_NO_OPEN: "1" };
+// wait 프로세스가 준비됐다는 stderr 첫 줄을 기다린다
+async function waitReady(proc: any): Promise<string> {
+  const reader = proc.stderr.getReader();
+  let text = "";
+  while (!text.includes("기다리는 중")) { const { value, done } = await reader.read(); if (done) break; text += new TextDecoder().decode(value); }
+  reader.releaseLock();
+  return text;
+}
 let proc: ReturnType<typeof Bun.spawn>;
 
 const round1 = {
@@ -156,7 +164,7 @@ describe("answer validation", () => {
     expect(saved.session).toBe(await session());
     expect(saved.rev).toBe(await rev());
     expect(typeof saved.submittedAt).toBe("string");
-    expect(existsSync(join(DIR, "answers", `1.json.${0}.tmp`))).toBe(false);
+    expect(readdirSync(join(DIR, "answers")).filter((f) => f.endsWith(".tmp"))).toEqual([]);
     expect((await state()).rounds[0].answers.answers).toEqual(answers);
     expect((await post(await withRev({ session: await session(), round: 1, answers }))).status).toBe(409);
   });
@@ -175,13 +183,67 @@ describe("answer validation", () => {
   });
 });
 
-describe("server reuse", () => {
+describe("server reuse and ownership", () => {
   test("up refuses a port held by a grill-web with a different state dir", async () => {
     const other = mkdtempSync(join(tmpdir(), "grill-web-other-"));
     const r = Bun.spawnSync([process.execPath, SERVER, "up", "x"], { env: { ...env, GRILL_WEB_DIR: other }, stdout: "pipe", stderr: "pipe" });
     rmSync(other, { recursive: true, force: true });
     expect(r.exitCode).toBe(2);
     expect(r.stderr.toString()).toContain("GRILL_WEB_PORT");
+  });
+  test("up on another port reuses the live server that already owns the dir", async () => {
+    const r = Bun.spawnSync([process.execPath, SERVER, "up", "reuse me"], { env: { ...env, GRILL_WEB_PORT: String(PORT + 1) }, stdout: "pipe", stderr: "pipe" });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString()).toContain(`localhost:${PORT} `);
+    let second = false;
+    try { second = (await fetch(`http://127.0.0.1:${PORT + 1}/api/health`)).ok; } catch {}
+    expect(second).toBe(false);
+    expect((await state()).title).toBe("reuse me");
+  });
+  test("reset refuses a non-empty directory that grill-web does not own", () => {
+    const foreign = mkdtempSync(join(tmpdir(), "grill-web-foreign-"));
+    mkdirSync(join(foreign, "rounds")); writeFileSync(join(foreign, "rounds", "mine.txt"), "keep");
+    const r = Bun.spawnSync([process.execPath, SERVER, "reset", "x"], { env: { ...env, GRILL_WEB_DIR: foreign }, stdout: "pipe", stderr: "pipe" });
+    expect(r.exitCode).toBe(2);
+    expect(readFileSync(join(foreign, "rounds", "mine.txt"), "utf8")).toBe("keep");
+    rmSync(foreign, { recursive: true, force: true });
+  });
+  test("an empty directory is adopted and marked", () => {
+    const fresh = mkdtempSync(join(tmpdir(), "grill-web-fresh-"));
+    const r = Bun.spawnSync([process.execPath, SERVER, "reset", "x"], { env: { ...env, GRILL_WEB_DIR: fresh }, stdout: "pipe", stderr: "pipe" });
+    expect(r.exitCode).toBe(0);
+    expect(existsSync(join(fresh, ".grill-web"))).toBe(true);
+    rmSync(fresh, { recursive: true, force: true });
+  });
+  test("a live lock blocks reset; a stale lock is reclaimed", () => {
+    mkdirSync(join(DIR, ".lock"));
+    const blocked = Bun.spawnSync([process.execPath, SERVER, "reset", "x"], { env, stdout: "pipe", stderr: "pipe" });
+    expect(blocked.exitCode).toBe(5);
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(join(DIR, ".lock"), old, old);
+    const ok = Bun.spawnSync([process.execPath, SERVER, "reset", "after stale lock"], { env, stdout: "pipe", stderr: "pipe" });
+    expect(ok.exitCode).toBe(0);
+    expect(existsSync(join(DIR, ".lock"))).toBe(false);
+    writeFileSync(join(DIR, "rounds", "1.json"), JSON.stringify(round1));
+  });
+});
+
+describe("answers are bound to the round revision", () => {
+  test("rewriting an answered round detaches the old answer, wait exits 6, resubmission overwrites", async () => {
+    writeFileSync(join(DIR, "rounds", "5.json"), JSON.stringify({ questions: [{ n: 1, title: "t", kind: "yesno", recommendation: "yes" }] }));
+    // 답이 오기 전에 라운드가 바뀌면 wait는 6으로 끝난다
+    const waiter = Bun.spawn([process.execPath, SERVER, "wait", "5"], { env, stdout: "ignore", stderr: "pipe" });
+    await waitReady(waiter);
+    writeFileSync(join(DIR, "rounds", "5.json"), JSON.stringify({ questions: [{ n: 1, title: "t2", kind: "yesno", recommendation: "yes" }] }));
+    expect(await waiter.exited).toBe(6);
+    // 답한 뒤 라운드가 바뀌면 옛 답은 떨어져 나간다
+    expect((await post(await withRev({ session: await session(), round: 5, answers: [{ n: 1, value: "yes", note: "" }] }))).status).toBe(200);
+    expect((await state()).rounds.find((r: any) => r.round === 5).answers.answers[0].value).toBe("yes");
+    writeFileSync(join(DIR, "rounds", "5.json"), JSON.stringify({ questions: [{ n: 1, title: "changed", kind: "yesno", recommendation: "no" }] }));
+    expect((await state()).rounds.find((r: any) => r.round === 5).answers).toBeNull();
+    expect((await post(await withRev({ session: await session(), round: 5, answers: [{ n: 1, value: "no", note: "" }] }))).status).toBe(200);
+    expect((await state()).rounds.find((r: any) => r.round === 5).answers.answers[0].value).toBe("no");
+    rmSync(join(DIR, "rounds", "5.json")); rmSync(join(DIR, "answers", "5.json"));
   });
 });
 
@@ -205,15 +267,14 @@ describe("summary and reset", () => {
   test("wait gives up when a new session starts underneath it", async () => {
     writeFileSync(join(DIR, "rounds", "1.json"), JSON.stringify({ questions: [{ n: 1, title: "t", kind: "yesno", recommendation: "yes" }] }));
     const waiter = Bun.spawn([process.execPath, SERVER, "wait", "1"], { env, stdout: "ignore", stderr: "pipe" });
-    await Bun.sleep(300);
+    await waitReady(waiter);
     Bun.spawnSync([process.execPath, SERVER, "reset", "third topic"], { env });
-    expect(await waiter.exited).toBe(4);
-    expect(await new Response(waiter.stderr).text()).toContain("새 세션");
+    expect(await waiter.exited).toBe(4); // stderr는 waitReady가 이미 읽고 있어 다시 읽지 않는다
   });
   test("wait prints the answer file when it appears", async () => {
     writeFileSync(join(DIR, "rounds", "1.json"), JSON.stringify({ questions: [{ n: 1, title: "t", kind: "yesno", recommendation: "yes" }] }));
-    const waiter = Bun.spawn([process.execPath, SERVER, "wait", "1"], { env, stdout: "pipe", stderr: "ignore" });
-    await Bun.sleep(300);
+    const waiter = Bun.spawn([process.execPath, SERVER, "wait", "1"], { env, stdout: "pipe", stderr: "pipe" });
+    await waitReady(waiter);
     const res = await post(await withRev({ session: await session(), round: 1, answers: [{ n: 1, value: "yes", note: "" }] }));
     expect(res.status).toBe(200);
     const out = await new Response(waiter.stdout).text();

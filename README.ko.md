@@ -77,7 +77,7 @@ sequenceDiagram
   S->>B: 마무리 화면
 ```
 
-전부 내 컴퓨터 안에서 돈다. 상태는 `~/.cache/grill-web/`에, 서버는 4747 포트(`GRILL_WEB_PORT`, `GRILL_WEB_DIR`로 변경). 폰트와 mermaid를 받는 CDN 요청 말고는 밖으로 나가는 게 없다.
+전부 내 컴퓨터 안에서 돈다. 상태는 `~/.cache/grill-web/`에, 서버는 4747 포트(`GRILL_WEB_PORT`, `GRILL_WEB_DIR`로 변경). 폰트와 mermaid를 받는 CDN 요청, 그리고 에이전트가 질문에 넣은 이미지 URL 말고는 밖으로 나가는 게 없다.
 
 ## 자주 묻는 것
 

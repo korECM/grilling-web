@@ -81,6 +81,10 @@ describe("svg", () => {
   test("svg attributes may reference local url(#id) but not external resources", () => {
     expect(sanitize('<svg><rect fill="url(#g)"></rect><rect fill="url(https://evil/x.svg#a)"></rect><rect style="fill:red"></rect></svg>')).toBe('<svg><rect fill="url(#g)"></rect><rect></rect><rect></rect></svg>');
   });
+  test("svg values: comment-obfuscated url and unknown functions are dropped, transforms and local url kept", () => {
+    expect(sanitize('<svg><rect fill="u/**/rl(https://evil/x)"></rect><rect fill="url (#a)"></rect><g transform="rotate(45) translate(1,2)"></g><rect fill="expression(1)"></rect><rect fill="translate(1) url(https://x)"></rect></svg>'))
+      .toBe('<svg><rect></rect><rect fill="url (#a)"></rect><g transform="rotate(45) translate(1,2)"></g><rect></rect><rect></rect></svg>');
+  });
   test("svg attribute values with CSS escapes are dropped", () => {
     expect(sanitize('<svg><rect fill="u\\72l(https://evil/x)"></rect><rect fill="#eee"></rect></svg>')).toBe('<svg><rect></rect><rect fill="#eee"></rect></svg>');
   });

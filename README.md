@@ -77,7 +77,7 @@ sequenceDiagram
   S->>B: closing screen
 ```
 
-Everything stays on your machine. State lives in `~/.cache/grill-web/`, the server listens on port 4747 (`GRILL_WEB_PORT` and `GRILL_WEB_DIR` to change), and nothing leaves except the CDN requests for the font and mermaid.
+Everything stays on your machine. State lives in `~/.cache/grill-web/`, the server listens on port 4747 (`GRILL_WEB_PORT` and `GRILL_WEB_DIR` to change), and nothing leaves except the CDN requests for the font and mermaid, plus any image URL the agent puts into a question.
 
 ## FAQ
 

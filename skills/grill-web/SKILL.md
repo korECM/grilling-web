@@ -31,11 +31,11 @@ If `grilling` is not in the list of available skills, do not start the interview
    bun "$SKILL_DIR/ui/server.ts" up "payment retry policy"
    ```
 
-   State lives in `~/.cache/grill-web/`. The previous session's rounds, answers and summary are wiped; nothing else in that folder is touched. If a server for that folder is already running on another port, `up` reuses it.
+   `up` prints the state directory. It is `~/.cache/grill-web` unless `GRILL_WEB_DIR` is set; use the printed path everywhere below, written here as `$STATE`. The previous session's rounds, answers and summary are wiped; nothing else in that folder is touched, and a folder that grill-web does not own is refused. If a server for that folder is already running on another port, `up` reuses it and prints that port.
 
-2. Write a round. Create `~/.cache/grill-web/rounds/<n>.json` with the Write tool. Count from 1. Schema below. If you need to fix a round the user has not answered yet, rewrite the same file; the form picks up the change within a couple of seconds and keeps whatever the user has already filled in.
+2. Write a round. Create `$STATE/rounds/<n>.json` with the Write tool. Count from 1. Schema below. If you need to fix a round the user has not answered yet, rewrite the same file; the form picks up the change within a couple of seconds and keeps whatever the user has already filled in.
 
-3. Wait. This blocks until the answer arrives. After 9.5 minutes it exits with code 3; run the same command again. If it exits with code 4, a new session was started underneath you (someone ran `up` again); drop this round and start over from step 1.
+3. Wait. This blocks until the answer arrives. Exit codes: 0 with the answer JSON on stdout; 3 after 9.5 minutes with no answer, run the same command again; 4 when a new session was started underneath you (someone ran `up` again), drop this round and start over from step 1; 6 when the round file changed while waiting, which happens when you rewrote it, run `wait <n>` again. An answer only counts for the exact version of the round file it was given for; if you rewrite a round after it was answered, the answer is discarded and the user has to answer again.
 
    ```bash
    bun "$SKILL_DIR/ui/server.ts" wait <n>
@@ -43,7 +43,7 @@ If `grilling` is not in the list of available skills, do not start the interview
 
    The answer JSON is printed to stdout. Read it and go back to step 2.
 
-4. Finish. The confirmation is itself a round in the form: one `yesno` question, "Do we share the same understanding?", with a short recap in its `body`. Only when that comes back `"yes"` do you write the agreed outcome as markdown to `~/.cache/grill-web/summary.md`. The form shows it as the closing screen. Leave a short version of the same summary in the terminal. Never take the confirmation from the terminal instead of the form.
+4. Finish. The confirmation is itself a round in the form: one `yesno` question, "Do we share the same understanding?", with a short recap in its `body`. Only when that comes back `"yes"` do you write the agreed outcome as markdown to `$STATE/summary.md`. The form shows it as the closing screen. Leave a short version of the same summary in the terminal. Never take the confirmation from the terminal instead of the form.
 
 Between rounds, the terminal gets one line like "Round 2, 4 questions. Please answer in the browser." Do not repeat the questions in the terminal.
 
