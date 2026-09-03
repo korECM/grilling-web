@@ -42,7 +42,8 @@ describe("html", () => {
   });
   test("removes attributes that are not on the allowlist", () => {
     expect(sanitize('<p class="a" id="b" title="c" data-k="v" aria-label="l" contenteditable="true" tabindex="1">t</p>')).toBe('<p class="a" id="b" title="c" data-k="v" aria-label="l">t</p>');
-    expect(sanitize('<td colspan="2" rowspan="3" bgcolor="red">t</td>')).toBe('<td colspan="2" rowspan="3">t</td>');
+    // td는 표 밖에서 파서가 버리므로(브라우저와 같음) 표 안에서 검사한다
+    expect(sanitize('<table><tbody><tr><td colspan="2" rowspan="3" bgcolor="red">t</td></tr></tbody></table>')).toBe('<table><tbody><tr><td colspan="2" rowspan="3">t</td></tr></tbody></table>');
   });
   test("style survives unless it pulls in urls or expressions", () => {
     expect(sanitize('<p style="color:red">t</p>')).toBe('<p style="color:red">t</p>');
@@ -64,8 +65,12 @@ describe("svg", () => {
     const svg = '<svg viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" fill="#eee" stroke="#000"></rect><text x="5" y="5" font-size="3">ok</text></svg>';
     expect(sanitize(svg)).toBe(svg);
   });
-  test("drops script, foreignObject and animation elements inside svg", () => {
-    expect(sanitize('<svg><script>x()</script><foreignObject><div>h</div></foreignObject><animate attributeName="x"></animate><circle r="1"></circle></svg>')).toBe('<svg><circle r="1"></circle></svg>');
+  test("drops foreignObject and animation elements inside svg", () => {
+    expect(sanitize('<svg><foreignObject><div>h</div></foreignObject><animate attributeName="x"></animate><circle r="1"></circle></svg>')).toBe('<svg><circle r="1"></circle></svg>');
+  });
+  test("drops script inside svg", () => {
+    // happy-dom은 svg 안의 script 뒤 형제를 삼키므로 script만 따로 본다. Chrome에서는 형제도 남는다.
+    expect(sanitize('<svg><script>x()</script></svg>')).toBe("<svg></svg>");
   });
   test("strips handlers and non-local use hrefs", () => {
     expect(sanitize('<svg><use href="#a" onload="x()"></use><use href="https://evil/x.svg#a"></use></svg>')).toBe('<svg><use href="#a"></use><use></use></svg>');

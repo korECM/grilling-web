@@ -6,6 +6,6 @@
     "test": "bun test skills/grill-web/ui"
   },
   "devDependencies": {
-    "happy-dom": "^15.11.7"
+    "happy-dom": "^20.13.2"
   }
 }
