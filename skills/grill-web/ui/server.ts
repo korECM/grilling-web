@@ -80,7 +80,10 @@ function state() {
 function ensureOwned() {
   mkdirSync(DIR, { recursive: true });
   if (existsSync(MARKER())) return;
-  if (readdirSync(DIR).length > 0) {
+  // 표식이 생기기 전 버전이 만든 폴더는 grill-web 파일만 들어 있다. 그 경우엔 표식을 붙이고 이어 쓴다
+  const KNOWN = new Set(["rounds", "answers", "session.json", "summary.md", "server.json", ".lock", ".DS_Store"]);
+  const entries = readdirSync(DIR);
+  if (entries.length > 0 && !(existsSync(join(DIR, "session.json")) && entries.every((e) => KNOWN.has(e)))) {
     console.error(`${DIR} 은 grill-web 폴더가 아닙니다(표식 없음, 파일 있음). 비어 있는 폴더나 전용 폴더를 GRILL_WEB_DIR로 지정하세요.`);
     process.exit(2);
   }
@@ -161,6 +164,9 @@ function validateAnswers(round: any, body: any): string[] {
 
 function serve() {
   ensureOwned();
+  // 세션 id가 생기기 전 버전의 session.json이면 id를 붙여 준다. 그래야 그 세션의 답변을 받을 수 있다
+  const legacy = readJson(join(DIR, "session.json"));
+  if (legacy && !legacy.id) writeFileSync(join(DIR, "session.json"), JSON.stringify({ id: randomUUID(), ...legacy }, null, 2));
   mkdirSync(roundsDir(), { recursive: true });
   mkdirSync(answersDir(), { recursive: true });
   // 이 폴더를 어느 서버가 맡고 있는지 남긴다. up이 다른 포트의 살아 있는 서버를 찾아 재사용하는 근거

@@ -392,7 +392,32 @@
     setTimeout(() => toastEl.classList.remove("show"), 1800);
   }
 
-  const revs = {}; // round -> 마지막으로 본 rev
+  let revs = {}; // round -> 마지막으로 본 rev
+
+  // 초안을 브라우저에 남긴다. 새로고침해도 같은 세션이면 그대로 돌아온다.
+  // 세션 id로 키를 나누고 rev도 같이 저장해, 복원 뒤 지문 대조가 바뀐 질문을 걸러낸다.
+  const storeKey = (id) => `grill-web:${id}`;
+  function persist() {
+    if (!sessionId) return;
+    try { localStorage.setItem(storeKey(sessionId), JSON.stringify({ drafts, noteOpen, revs, at: Date.now() })); } catch { /* 사생활 보호 모드 등. 그냥 메모리로만 간다 */ }
+  }
+  function restore(id) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storeKey(id)) ?? "null");
+      if (saved && typeof saved === "object") { drafts = saved.drafts ?? {}; noteOpen = saved.noteOpen ?? {}; revs = saved.revs ?? {}; return; }
+    } catch { /* 깨진 값은 무시 */ }
+    drafts = {}; noteOpen = {}; revs = {};
+  }
+  // 일주일 넘은 세션 초안만 정리한다. 다른 서버가 잠깐 같은 포트에 떠서 세션이 바뀌어 보여도 원래 초안은 남는다
+  function prune() {
+    try {
+      for (const k of Object.keys(localStorage)) {
+        if (!k.startsWith("grill-web:")) continue;
+        const at = JSON.parse(localStorage.getItem(k) ?? "{}")?.at ?? 0;
+        if (Date.now() - at > 7 * 86400e3) localStorage.removeItem(k);
+      }
+    } catch {}
+  }
 
   // 라운드 파일이 고쳐졌을 때 기존 초안을 새 질문과 대조한다. 안 맞는 초안은 버리거나 잘라낸다.
   function reconcileDrafts(r) {
@@ -584,6 +609,7 @@
       document.title = `라운드 ${open.round} · ${state.title || "grill"}`;
     }
     main.innerHTML = html;
+    persist();
     renderSide(state, open, past);
     hydrateMermaid();
   }
@@ -659,6 +685,7 @@
       v.innerHTML = `${esc(t.value)}${q.unit ? `<small>${esc(q.unit)}</small>` : ""}`;
       refreshProgress();
     }
+    persist();
   });
 
   async function send() {
@@ -677,6 +704,7 @@
     sending = false;
     if (!res || !res.ok) { const err = res ? await res.json().catch(() => ({})) : null; toast(err?.error ?? (res ? `보내지 못했어요 (${res.status})` : "서버에 닿지 못했어요")); refreshProgress(); return; }
     toast("보냈어요");
+    delete drafts[r.round]; persist();
     await poll(true);
   }
 
@@ -688,7 +716,7 @@
       if (my < pollApplied) return; // 더 새 응답이 이미 반영됐다. 늦게 온 옛 응답은 버린다
       pollApplied = my;
       // 세션이 바뀌면(새 인터뷰 시작) 이 탭의 초안은 버린다. 라운드는 rev로 내용 변경까지 잡는다.
-      if (s.session !== sessionId) { sessionId = s.session; drafts = {}; noteOpen = {}; }
+      if (s.session !== sessionId) { sessionId = s.session; restore(sessionId); prune(); }
       for (const r of s.rounds) {
         if (revs[r.round] !== undefined && revs[r.round] !== r.rev) reconcileDrafts(r);
         revs[r.round] = r.rev;
